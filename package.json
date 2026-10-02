@@ -1,0 +1,30 @@
+{
+  "name": "myekalliptus",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "setup": "npm ci --prefix backend && npm ci --prefix apps/web",
+    "build": "npm run build --prefix backend && npm run build --prefix apps/web",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix apps/web",
+    "db:migrate": "npm run migrate --prefix backend",
+    "db:seed": "npm run seed:admin --prefix backend",
+    "db:sample": "npm run seed:sample --prefix backend",
+    "seed:demo": "node infra/seed-demo.mjs",
+    "test": "npm test --prefix backend && npm test --prefix apps/web",
+    "test:integration": "node infra/verify.mjs",
+    "local:up": "node infra/local.mjs",
+    "local:down": "node infra/local.mjs --down",
+    "compose:up": "docker compose up --build -d",
+    "compose:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "embedded-postgres": "17.9.0-beta.16"
+  },
+  "allowScripts": {
+    "@embedded-postgres/windows-x64@17.9.0-beta.17": true
+  }
+}
