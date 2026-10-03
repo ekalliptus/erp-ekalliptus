@@ -21,8 +21,8 @@ class _QueuePageState extends State<QueuePage> {
   bool _loggingOut = false;
   String _query = '', _filter = 'active';
   String? _error;
-  bool get _canCreate => ['superadmin', 'hardware_tech', 'cashier'].contains(widget.role);
-  bool get _canEdit => ['superadmin', 'hardware_tech'].contains(widget.role);
+  bool get _canCreate => ['admin', 'staff'].contains(widget.role);
+  bool get _canEdit => ['admin', 'staff'].contains(widget.role);
 
   Future<void> _logout() async {
     setState(() => _loggingOut = true);

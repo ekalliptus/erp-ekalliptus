@@ -21,11 +21,11 @@ export default function Home() {
   const [dialog, setDialog] = useState<DialogState | null>(null); const dialogRef = useRef<HTMLDialogElement>(null); const opener = useRef<HTMLElement | null>(null); const paymentRef = useRef('');
   const [transitionTarget, setTransitionTarget] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
-  const finance = user?.role === 'superadmin' || user?.role === 'finance_admin';
-  const permitted = (roles: string[]) => !!user && (user.role === 'superadmin' || roles.includes(user.role));
-  const available = navigation.filter(([key]) => !(['dashboard', 'ledger'].includes(key) && !finance) && !(key === 'invoices' && !permitted(['finance_admin', 'cashier'])));
+  const finance = user?.role === 'admin';
+  const permitted = (roles: string[]) => !!user && (user.role === 'admin' || roles.includes(user.role));
+  const available = navigation.filter(([key]) => !(['dashboard', 'ledger'].includes(key) && !finance) && !(key === 'invoices' && !permitted([])));
   const clearSession = useCallback(() => { sessionStorage.removeItem('nexus-token'); setToken(''); setUser(null); setCart([]); setCustomers([]); setProducts([]); setRepairs([]); setProjects([]); setInvoices([]); setOrders([]); setJournals([]); setDashboard(null); setDialog(null); setNotice(''); }, []);
-  useEffect(() => { const expired = () => { clearSession(); setError('Session berakhir. Silakan masuk kembali.'); }; window.addEventListener('session-expired', expired); const saved = sessionStorage.getItem('nexus-token'); if (saved) api<User>('/auth/me', saved).then(u => { setToken(saved); setUser(u); setView(['superadmin', 'finance_admin'].includes(u.role) ? 'dashboard' : 'pos'); }).catch(e => { clearSession(); setError(e.message); }).finally(() => setBooting(false)); else setBooting(false); return () => window.removeEventListener('session-expired', expired); }, [clearSession]);
+  useEffect(() => { const expired = () => { clearSession(); setError('Session berakhir. Silakan masuk kembali.'); }; window.addEventListener('session-expired', expired); const saved = sessionStorage.getItem('nexus-token'); if (saved) api<User>('/auth/me', saved).then(u => { setToken(saved); setUser(u); setView(u.role === 'admin' ? 'dashboard' : 'pos'); }).catch(e => { clearSession(); setError(e.message); }).finally(() => setBooting(false)); else setBooting(false); return () => window.removeEventListener('session-expired', expired); }, [clearSession]);
   const reload = useCallback(async () => {
     if (!token) return; setLoading(true); setError('');
     try {
@@ -48,7 +48,7 @@ export default function Home() {
   const open = (kind: string, item?: DialogState['item']) => { opener.current = document.activeElement as HTMLElement; paymentRef.current = crypto.randomUUID(); setError(''); if (kind === 'transition') setTransitionTarget(transitions[(item as Repair).currentState]?.[0] || ''); setDialog({ kind, item }); };
   const navigate = (next: View) => { setView(next); setQuery(''); setNotice(''); setError(''); setMenuOpen(false); };
   const customerName = (id: string) => customers.find(c => c.id === id)?.fullName || 'Pelanggan';
-  async function login(e: FormEvent<HTMLFormElement>) { e.preventDefault(); setBusy(true); setError(''); const f = new FormData(e.currentTarget); try { const data = await api<{ token: string; user: User }>('/auth/login', '', 'POST', { email: f.get('email'), password: f.get('password') }); sessionStorage.setItem('nexus-token', data.token); setToken(data.token); setUser(data.user); setView(['superadmin', 'finance_admin'].includes(data.user.role) ? 'dashboard' : 'pos'); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
+  async function login(e: FormEvent<HTMLFormElement>) { e.preventDefault(); setBusy(true); setError(''); const f = new FormData(e.currentTarget); try { const data = await api<{ token: string; user: User }>('/auth/login', '', 'POST', { email: f.get('email'), password: f.get('password') }); sessionStorage.setItem('nexus-token', data.token); setToken(data.token); setUser(data.user); setView(data.user.role === 'admin' ? 'dashboard' : 'pos'); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }
   async function logout() { setBusy(true); try { await api('/auth/logout', token, 'POST'); } catch { /* Local token must still be removed when the server is unavailable. */ } finally { clearSession(); setBusy(false); } }
   async function mutate(path: string, method: string, body: unknown, success: string) { if (busy) return false; setBusy(true); setError(''); try { await api(path, token, method, body); setNotice(success); setDialog(null); await reload(); return true; } catch (e) { setError((e as Error).message); return false; } finally { setBusy(false); } }
   async function submit(e: FormEvent<HTMLFormElement>) {

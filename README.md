@@ -31,17 +31,14 @@ Prasyarat Node.js 22+, npm, PostgreSQL 16+ (17 direkomendasikan).
 
 ### Akun dummy untuk uji coba
 
-`npm run seed:demo` membuat lima akun contoh (satu per peran) di database yang sedang berjalan. Kata sandi bawaan `DemoMyEkalliptus2026` dapat diganti lewat variabel `DEMO_PASSWORD`. **Kredensial ini diketahui publik dan hanya untuk uji coba lokal, jangan pernah dijalankan di server produksi.**
+`npm run seed:demo` membuat dua akun contoh di database yang sedang berjalan. Kata sandi bawaan `DemoMyEkalliptus2026` dapat diganti lewat variabel `DEMO_PASSWORD`. **Kredensial ini diketahui publik dan hanya untuk uji coba lokal, jangan pernah dijalankan di server produksi.**
 
 | Email | Peran | Akses utama |
 | :--- | :--- | :--- |
-| `owner@myekalliptus.test` | superadmin | Semua menu termasuk inventori, stok, dan buku besar |
-| `finance@myekalliptus.test` | finance_admin | Dashboard, tagihan, pembayaran, buku besar |
-| `kasir@myekalliptus.test` | cashier | Kasir/POS, pelanggan, tiket servis, tagihan |
-| `teknisi@myekalliptus.test` | hardware_tech | Tiket servis: kuotasi, bukti, perubahan tahap |
-| `dev@myekalliptus.test` | software_dev | Proyek agensi dan milestone |
+| `admin@myekalliptus.test` | admin | Semua menu: dashboard, inventori, stok, proyek, tagihan, pembayaran, buku besar |
+| `staff@myekalliptus.test` | staff | Operasional: kasir/POS, pelanggan, tiket servis (kuotasi, bukti, perubahan tahap) |
 
-Semua memakai kata sandi yang sama. Menjalankan `seed:demo` lagi tidak mengubah akun yang sudah ada; hapus manual di database bila perlu direset.
+Semua memakai kata sandi yang sama. Menjalankan `seed:demo` lagi tidak mengubah akun yang sudah ada; hapus manual di database bila perlu direset. Peran hanya ada dua: `admin` (penuh, termasuk uang dan konfigurasi) dan `staff` (operasional harian); akun admin utama dibuat dari `.env` saat `local:up`.
 
 ### Cara manual (PostgreSQL sendiri)
 
