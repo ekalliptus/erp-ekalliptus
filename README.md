@@ -5,12 +5,12 @@ Fondasi ERP lokal tiga jalur: POS retail, servis, proyek agensi. **Bukan impleme
 ## Struktur repositori
 
 ```
-apps/web/            Antarmuka web (Next.js) — kasir, inventori, servis, proyek, tagihan, buku besar
+apps/web/            Antarmuka web (Next.js): kasir, inventori, servis, proyek, tagihan, buku besar
 apps/mobile-teknisi/ Aplikasi teknisi (Flutter, Android)
-backend/             API (TypeScript) — aturan bisnis, migrasi, jurnal
+backend/             API (TypeScript): aturan bisnis, migrasi, jurnal
 infra/               Skrip run lokal, seed demo, verifikasi integrasi, Dockerfile, Caddyfile
 docs/                Catatan desain dan batasan blueprint
-.data/               Data runtime lokal (PostgreSQL embedded, artefak uji) — gitignored
+.data/               Data runtime lokal (PostgreSQL embedded, artefak uji, gitignored
 ```
 
 Backend adalah sumber kebenaran aturan bisnis; web dan Flutter hanya klien API yang sama.
@@ -22,16 +22,16 @@ Prasyarat Node.js 22+, npm, PostgreSQL 16+ (17 direkomendasikan).
 ### Cara cepat: satu perintah (PostgreSQL embedded, tanpa install database)
 
 1. `npm run setup` (sekali, mengunduh dependensi).
-2. `npm run local:up` — menyalakan PostgreSQL persisten di `.data/postgres`, menerapkan migrasi, membuat akun admin (kredensial dihasilkan otomatis dan disimpan di `.env`), lalu menjalankan backend (loopback) dan frontend (bind WiFi/LAN). Biarkan terminal berjalan.
+2. `npm run local:up`: menyalakan PostgreSQL persisten di `.data/postgres`, menerapkan migrasi, membuat akun admin (kredensial dihasilkan otomatis dan disimpan di `.env`), lalu menjalankan backend (loopback) dan frontend (bind WiFi/LAN). Biarkan terminal berjalan.
 3. Akses:
    - Web di PC ini: `http://localhost:3100`.
    - Web dari HP/perangkat lain di WiFi yang sama: `http://<IP-LAN-PC>:3100` (alamat tercetak saat start, mis. `http://192.168.1.76:3100`). Jika tidak terjangkau, izinkan port 3100 di Windows Firewall (perlu admin): `netsh advfirewall firewall add rule name="MyEkalliptus Web 3100" dir=in action=allow protocol=TCP localport=3100 profile=private`.
    - Semua lalu lintas API melewati proxy frontend yang sama, jadi backend tidak perlu dibuka ke jaringan.
-4. `npm run local:down` (dari terminal lain) menghentikan semuanya. Data tetap tersimpan di `.data/postgres` untuk run berikutnya. `.env` berisi kredensial admin — jangan dibagikan atau di-commit.
+4. `npm run local:down` (dari terminal lain) menghentikan semuanya. Data tetap tersimpan di `.data/postgres` untuk run berikutnya. `.env` berisi kredensial admin, jangan dibagikan atau di-commit.
 
 ### Akun dummy untuk uji coba
 
-`npm run seed:demo` membuat lima akun contoh (satu per peran) di database yang sedang berjalan. Kata sandi bawaan `DemoMyEkalliptus2026` dapat diganti lewat variabel `DEMO_PASSWORD`. **Kredensial ini diketahui publik dan hanya untuk uji coba lokal — jangan pernah dijalankan di server produksi.**
+`npm run seed:demo` membuat lima akun contoh (satu per peran) di database yang sedang berjalan. Kata sandi bawaan `DemoMyEkalliptus2026` dapat diganti lewat variabel `DEMO_PASSWORD`. **Kredensial ini diketahui publik dan hanya untuk uji coba lokal, jangan pernah dijalankan di server produksi.**
 
 | Email | Peran | Akses utama |
 | :--- | :--- | :--- |
@@ -59,7 +59,7 @@ Proyek Flutter berada di `apps/mobile-teknisi` (Android). Fitur: masuk dengan ak
 
 1. Prasyarat: Flutter SDK 3.x dengan Android toolchain (`flutter doctor`).
 2. Jalankan lokal seperti di atas (`npm run local:up`).
-3. `flutter pub get` di `apps/mobile-teknisi`, lalu `flutter run` — pilih emulator atau perangkat Android. ID aplikasi Android: `id.myekalliptus.teknisi`.
+3. `flutter pub get` di `apps/mobile-teknisi`, lalu `flutter run`, pilih emulator atau perangkat Android. ID aplikasi Android: `id.myekalliptus.teknisi`.
    - Emulator Android memakai alamat server bawaan `http://10.0.2.2:3100/api/v1` (alias host).
    - HP fisik di WiFi yang sama: isi "Alamat server" di layar masuk dengan `http://<IP-LAN-PC>:3100/api/v1`.
    - Bangun APK: `flutter build apk --debug` (hasil di `build/app/outputs/flutter-apk/`).
