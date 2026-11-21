@@ -173,6 +173,13 @@ Seluruh misi utama dan iterasi lanjutan sudah selesai dibangun dan diverifikasi:
      1. Service account JSON: Firebase Console -> Project settings -> Service accounts -> Generate new private key -> simpan sebagai `C:\dev\erp-ekalliptus\.secrets\fcm-service-account.json` (folder sudah di-gitignore), lalu `npm run deploy:neon`.
      2. VAPID key: Firebase Console -> Project settings -> Cloud Messaging -> Web Push certificates -> Generate key pair -> taruh di `.env.local` sebagai `VITE_FCM_VAPID_KEY=...`, lalu rebuild + deploy Pages.
    - Belum diuji runtime: lonceng berisi data + push keluar perangkat butuh login owner nyata (web/Android) dan rebuild APK debug ke emulator untuk uji FCM Android.
+11. **Login via Username + Domain Produksi (21 Nov 2026)**:
+   - Domain produksi resmi: **https://my.ekalliptus.com** (Cloudflare Pages custom domain, status `active`; sebelumnya sempat nyangkut di proyek `ekalliptus-admin` dan dipindah). `myekalliptus.pages.dev` tetap jalan sebagai alias.
+   - Kolom `employees.username` (unique, nullable). Login web & Flutter menerima **email atau username**: username di-resolve lewat endpoint publik `POST /api/auth/username-lookup` sebelum sign-in Neon Auth (catatan jujur: endpoint publik tanpa rate limit khusus, cocok untuk tool internal).
+   - Form aktivasi (web "Aktivasi Pertama" + mobile "Aktivasi") kini punya field **Username** (3-24, `a-z0-9_.`), disimpan via `POST /api/me/username` (authed, 409 jika duplikat). Owner/HR juga bisa mengisi username lewat RBAC create/update employee.
+   - Profil: sidebar web menampilkan `@username` di bawah role, app bar mobile menampilkan `@username` setelah kode karyawan.
+   - Verifikasi: build exit 0, Flutter analyze 0 issue, Flutter test 12/12, E2E 14 PASS termasuk langkah username (set, lookup, duplikat 409). Terdeploy: Functions + Pages (`49d9fda4`). Commit `965444c` + `71ffe0f`.
+   - Pelajaran: route `/api/me/username` awalnya terdaftar sebelum middleware auth sehingga 500 (auth context kosong); urutan registrasi route di Hono harus setelah `app.use('/api/*', apiAuth)`.
 
 ---
 
