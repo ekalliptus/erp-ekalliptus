@@ -1,11 +1,16 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/notifications/fcm_adapter.dart';
+import '../../core/notifications/notification_models.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/rbac/rbac_state.dart';
 import '../../core/theme/eucalyptus_theme.dart';
 import '../common/erp_widgets.dart';
+import '../common/shimmer_skeleton.dart';
 import '../common/theme_transition.dart';
 
 class FloatingNavShell extends ConsumerWidget {
@@ -199,6 +204,7 @@ class FloatingNavShell extends ConsumerWidget {
                 child: const Icon(Icons.cloud_upload_outlined),
               ),
             ),
+          const _NotificationsBellButton(),
           IconButton(
             tooltip: 'Quick Action Center',
             onPressed: () => _openQuickActionCenter(context, ref),
@@ -222,6 +228,7 @@ class FloatingNavShell extends ConsumerWidget {
       body: Stack(
         children: [
           Positioned.fill(child: child),
+          const Positioned.fill(child: _FcmForegroundListener()),
           Positioned(
             left: 14,
             right: 14,
@@ -325,5 +332,221 @@ class _FloatingNavButton extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _NotificationsBellButton extends ConsumerWidget {
+  const _NotificationsBellButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unreadAsync = ref.watch(unreadNotificationsProvider);
+    final unread = unreadAsync.valueOrNull ?? 0;
+    return IconButton(
+      tooltip: 'Notifikasi',
+      onPressed: () => _openNotificationsSheet(context, ref),
+      icon: unread > 0
+          ? Badge(
+              label: Text(unread > 99 ? '99+' : '$unread'),
+              child: const Icon(Icons.notifications_outlined),
+            )
+          : const Icon(Icons.notifications_outlined),
+    );
+  }
+}
+
+Future<void> _openNotificationsSheet(BuildContext context, WidgetRef ref) async {
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (sheetContext) {
+      return Consumer(
+        builder: (ctx, sheetRef, _) {
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.6,
+            minChildSize: 0.4,
+            maxChildSize: 0.9,
+            builder: (bCtx, scrollController) {
+              return Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(bCtx).colorScheme.surface,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: _NotificationsSheet(
+                  controller: scrollController,
+                  ref: sheetRef,
+                ),
+              );
+            },
+          );
+        },
+      );
+    },
+  );
+  if (context.mounted) {
+    ref.invalidate(unreadNotificationsProvider);
+  }
+}
+
+class _NotificationsSheet extends ConsumerStatefulWidget {
+  const _NotificationsSheet({required this.controller, required this.ref});
+  final ScrollController controller;
+  final WidgetRef ref;
+
+  @override
+  ConsumerState<_NotificationsSheet> createState() => _NotificationsSheetState();
+}
+
+class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
+  List<NotificationEntry>? entries;
+  String? error;
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { loading = true; error = null; });
+    try {
+      final rows = await widget.ref.read(unreadNotificationsProvider.notifier).fetchEntries();
+      if (mounted) setState(() { entries = rows; loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { error = e.toString(); loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text('Notifikasi', style: Theme.of(context).textTheme.titleMedium)),
+            TextButton(
+              onPressed: () async {
+                await widget.ref.read(unreadNotificationsProvider.notifier).markAllRead();
+                await _load();
+              },
+              child: const Text('Tandai dibaca'),
+            ),
+          ],
+        ),
+        Expanded(
+          child: loading
+              ? ListView(
+                  controller: widget.controller,
+                  children: List.generate(3, (_) => const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: SkeletonBox(height: 64),
+                  )),
+                )
+              : error != null
+                  ? ErpErrorCard(message: 'Gagal memuat notifikasi.', onRetry: _load)
+                  : (entries == null || entries!.isEmpty)
+                      ? const ErpEmptyCard(
+                          title: 'Belum ada notifikasi',
+                          description: 'Aktivitas modul yang relevan akan muncul di sini.',
+                        )
+                      : ListView.builder(
+                          controller: widget.controller,
+                          itemCount: entries!.length,
+                          itemBuilder: (ctx, i) {
+                            final e = entries![i];
+                            return _NotificationCard(entry: e, tone: t);
+                          },
+                        ),
+        ),
+      ],
+    );
+  }
+}
+
+class _NotificationCard extends StatelessWidget {
+  const _NotificationCard({required this.entry, required this.tone});
+
+  final NotificationEntry entry;
+  final EucalyptusTokens tone;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(tone.radiusMd),
+        side: BorderSide(color: entry.isUnread ? tone.accent : tone.border),
+      ),
+      child: ListTile(
+        dense: true,
+        title: Row(
+          children: [
+            if (entry.isUnread)
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: Icon(Icons.circle, size: 8, color: tone.accent),
+              ),
+            Expanded(child: Text(entry.title, style: Theme.of(context).textTheme.titleSmall)),
+            ErpBadge(
+              label: entry.module,
+              tone: ErpBadgeTone.neutral,
+            ),
+          ],
+        ),
+        subtitle: Text(
+          entry.body,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: Text(
+          entry.createdAt.toLocal().toString().substring(0, 16),
+          style: Theme.of(context).textTheme.labelSmall,
+        ),
+      ),
+    );
+  }
+}
+
+class _FcmForegroundListener extends ConsumerStatefulWidget {
+  const _FcmForegroundListener();
+
+  @override
+  ConsumerState<_FcmForegroundListener> createState() => _FcmForegroundListenerState();
+}
+
+class _FcmForegroundListenerState extends ConsumerState<_FcmForegroundListener> {
+  StreamSubscription<RemoteMessage>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!FcmAdapter.isSupportedOnThisDevice) return;
+    _sub = FcmAdapter.foregroundMessages.listen((message) {
+      if (!mounted) return;
+      ref.invalidate(unreadNotificationsProvider);
+      final notification = message.notification;
+      if (notification == null) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${notification.title ?? "MyEkalliptus"}: ${notification.body}'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox.shrink();
   }
 }

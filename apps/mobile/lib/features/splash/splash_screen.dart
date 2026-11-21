@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/config/app_config.dart';
+import '../../core/notifications/fcm_adapter.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/theme/eucalyptus_theme.dart';
 
@@ -78,11 +79,30 @@ class _SplashScreenState extends ConsumerState<SplashScreen> with SingleTickerPr
       authenticated = false;
     }
 
+    if (authenticated) {
+      await _registerNotifications();
+    }
+
     if (!mounted) return;
     if (widget.onResolved != null) {
       widget.onResolved!(authenticated);
     } else {
       context.go(authenticated ? '/dashboard' : '/login');
+    }
+  }
+
+  /// Registrasi token FCM best-effort saat sesi tersimpan dipulihkan.
+  Future<void> _registerNotifications() async {
+    try {
+      if (!FcmAdapter.isSupportedOnThisDevice) return;
+      await FcmAdapter.ensureInitialized();
+      final token = await FcmAdapter.requestToken();
+      if (token == null) return;
+      final registration = ref.read(notificationRegistrationProvider);
+      registration.updateToken(token);
+      await registration.registerCurrentToken();
+    } catch (_) {
+      // Senyap: push notifikasi bersifat opsional.
     }
   }
 

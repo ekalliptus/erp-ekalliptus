@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import '../auth/auth_service.dart';
 import '../config/app_config.dart';
+import '../notifications/notification_models.dart';
 import '../rbac/rbac_state.dart';
 
 class ApiException implements Exception {
@@ -108,6 +109,46 @@ class ApiClient {
 
   Future<void> createTransaction(Map<String, dynamic> body) async {
     await _request<dynamic>('POST', '/api/finance/transactions', data: body);
+  }
+
+  Future<void> registerDeviceToken(String token, {String platform = 'flutter'}) async {
+    await _request<dynamic>(
+      'POST',
+      '/api/notifications/tokens',
+      data: {'token': token, 'platform': platform},
+    );
+  }
+
+  Future<void> unregisterDeviceToken(String token) async {
+    await _request<dynamic>(
+      'POST',
+      '/api/notifications/tokens/unregister',
+      data: {'token': token},
+    );
+  }
+
+  Future<int> fetchUnreadNotificationCount() async {
+    final res = await _request<Map<String, dynamic>>('GET', '/api/notifications/unread-count');
+    return (res['unread'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<List<NotificationEntry>> fetchNotifications({int limit = 30}) async {
+    final res = await _request<Map<String, dynamic>>(
+      'GET',
+      '/api/notifications?limit=$limit',
+    );
+    final rows = (res['notifications'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+    return rows.map(NotificationEntry.fromJson).toList();
+  }
+
+  Future<void> markAllNotificationsRead() async {
+    await _request<dynamic>('POST', '/api/notifications/read-all');
+  }
+
+  Future<void> markNotificationRead(String id) async {
+    await _request<dynamic>('POST', '/api/notifications/$id/read');
   }
 
   Future<void> approveTransaction(String id) async {

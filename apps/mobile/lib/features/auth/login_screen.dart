@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/config/app_config.dart';
+import '../../core/notifications/fcm_adapter.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/theme/eucalyptus_theme.dart';
 import '../common/erp_widgets.dart';
@@ -23,6 +24,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _isSignUp = false;
   bool _pending = false;
   String? _errorMsg;
+
+  /// Registrasi token FCM best-effort: kegagalan tidak pernah menggagalkan login.
+  Future<void> _registerNotifications() async {
+    try {
+      if (!FcmAdapter.isSupportedOnThisDevice) return;
+      await FcmAdapter.ensureInitialized();
+      final token = await FcmAdapter.requestToken();
+      if (token == null) return;
+      final registration = ref.read(notificationRegistrationProvider);
+      registration.updateToken(token);
+      await registration.registerCurrentToken();
+      ref.invalidate(unreadNotificationsProvider);
+    } catch (_) {
+      // Senyap: push notifikasi bersifat opsional.
+    }
+  }
 
   @override
   void dispose() {
@@ -63,6 +80,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         await auth.signInEmail(email: email, password: pass);
       }
       ref.invalidate(sessionProfileProvider);
+      await _registerNotifications();
       widget.onAuthenticated?.call();
     } catch (err) {
       if (mounted) {

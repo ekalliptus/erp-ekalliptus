@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:ekalliptus_erp_mobile/core/notifications/notification_models.dart';
+import 'package:ekalliptus_erp_mobile/core/notifications/notification_registration.dart';
 import 'package:ekalliptus_erp_mobile/core/offline/offline_queue_store.dart';
 import 'package:ekalliptus_erp_mobile/core/providers/app_providers.dart';
 import 'package:ekalliptus_erp_mobile/core/rbac/rbac_state.dart';
@@ -244,6 +246,69 @@ void main() {
       await tester.tap(find.byType(AnimatedThemeToggleButton));
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.light_mode_rounded), findsOneWidget);
+    });
+  });
+
+  group('Notification registration & model', () {
+    test('registerCurrentToken idempotent per token', () async {
+      final calls = <String>[];
+      final service = NotificationRegistrationService(
+        onRegister: (t) async => calls.add(t),
+        onUnregister: (t) async {},
+      );
+      service.updateToken('a' * 40);
+      await service.registerCurrentToken();
+      await service.registerCurrentToken();
+      expect(calls, hasLength(1));
+      service.updateToken('a' * 40);
+      await service.registerCurrentToken();
+      expect(calls, hasLength(1));
+    });
+
+    test('token baru memicu registrasi ulang', () async {
+      final calls = <String>[];
+      final service = NotificationRegistrationService(
+        onRegister: (t) async => calls.add(t),
+        onUnregister: (t) async {},
+      );
+      service.updateToken('a' * 40);
+      await service.registerCurrentToken();
+      service.updateToken('b' * 40);
+      await service.registerCurrentToken();
+      expect(calls, hasLength(2));
+    });
+
+    test('unregister mengirim token dan mengizinkan registrasi ulang', () async {
+      final registered = <String>[];
+      final unregistered = <String>[];
+      final service = NotificationRegistrationService(
+        onRegister: (t) async => registered.add(t),
+        onUnregister: (t) async => unregistered.add(t),
+      );
+      service.updateToken('c' * 40);
+      await service.registerCurrentToken();
+      await service.unregister();
+      expect(unregistered, ['c' * 40]);
+      service.updateToken('c' * 40);
+      await service.registerCurrentToken();
+      expect(registered, hasLength(2));
+    });
+
+    test('NotificationEntry.fromJson memetakan field inti', () {
+      final entry = NotificationEntry.fromJson({
+        'id': 'n-1',
+        'module': 'finance',
+        'event_type': 'transaction_recorded',
+        'title': 'Kas masuk dicatat',
+        'body': 'Kas Kantor: Rp50.000',
+        'created_at': '2026-11-21T03:00:00.000Z',
+        'read_at': null,
+        'entity_id': 'tx-1',
+      });
+      expect(entry.isUnread, isTrue);
+      expect(entry.module, 'finance');
+      expect(entry.entityId, 'tx-1');
+      expect(entry.createdAt.year, 2026);
     });
   });
 }
