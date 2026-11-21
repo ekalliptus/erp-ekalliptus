@@ -113,6 +113,7 @@ c:\dev\erp-ekalliptus\
 | Neon Functions Endpoint (`erpapi`) | `https://br-odd-frog-aoghf6vq-erpapi.compute.c-2.ap-southeast-1.aws.neon.tech` |
 | Neon Auth URL | `https://ep-wispy-pond-aowkf9dl.neonauth.c-2.ap-southeast-1.aws.neon.tech/neondb/auth` |
 | Web Origin Dev | `http://localhost:5173` |
+| Web Origin Produksi | `https://myekalliptus.pages.dev` (Cloudflare Pages, proyek `myekalliptus`, akun CF `ekalliptus@gmail.com`) |
 
 ### Layanan yang Terhubung
 1. **`postgres`**: Neon Postgres 18 (`neondb`) melalui `@neondatabase/serverless` dan Drizzle ORM.
@@ -155,7 +156,13 @@ Seluruh misi utama dan iterasi lanjutan sudah selesai dibangun dan diverifikasi:
 8. **Penyimpanan Git (21 Nov 2026)**:
    - Seluruh arsitektur Neon di-commit sebagai `e606844` (`feat: rebuild ERP on Neon five-service stack`, 193 file, +27.081/−5.762) dan di-push ke `origin/main`.
    - Folder `legacy/` (backend lama, docker infra, mobile-teknisi, web Next.js) dihapus; kode lama tetap ada di riwayat git (commit `b030932` s.d. `413cfb0`).
-   - Verifikasi sebelum commit: build web `exit 0`, Flutter analyze `0` issue, Flutter test `8/8`, pemindaian secrets bersih, `.env.local` tetap di luar git.
+   - Verifikasi sebelum commit: build web `exit 0`, Flutter analyze `0` issue, Flutter test `8/8`, pemindaian secrets bersih, `.env.local` tidak ikut ter-stage.
+9. **Deploy Produksi Cloudflare Pages (21 Nov 2026)**:
+   - Web terdeploy ke **https://myekalliptus.pages.dev** (proyek Pages `myekalliptus`, branch produksi `main`, akun Cloudflare `ekalliptus@gmail.com`, deploy ID `521c021d`).
+   - SPA fallback ditambahkan lewat `apps/web/public/_redirects`; URL Neon (API/Auth/Realtime) sama dengan dev karena dibakar dari `.env.local` saat build.
+   - Domain `https://myekalliptus.pages.dev` didaftarkan ke **Neon Auth Trusted Domains** via `neon api -X POST /projects/raspy-wind-79044194/auth/domains -F "domain=https://myekalliptus.pages.dev" -F "auth_provider=better_auth"`. CORS API memang sudah mengizinkan origin apa pun (`origin: (origin) => origin || '*'`).
+   - Probe origin trust (POST `/sign-in/email` dengan kredensial dummy dari origin produksi): HTTP `401 INVALID_EMAIL_OR_PASSWORD`, bukan penolakan origin, jadi alur login produksi siap dipakai.
+   - **Belum diuji**: login end-to-end dengan akun owner sungguhan dari domain produksi (butuh kredensial kamu).
 
 ---
 
