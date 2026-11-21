@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { presignDownloadSchema, presignUploadSchema } from '@ekalliptus/contracts';
+import { hasPermission, presignDownloadSchema, presignUploadSchema } from '@ekalliptus/contracts';
 import { Hono } from 'hono';
 import { writeAuditLog } from '../middleware/audit.js';
 import { getDb } from '../db.js';
@@ -50,13 +50,41 @@ router.post('/presign-download', async (c) => {
   const parsed = presignDownloadSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 
+  // Cek kepemilikan/izin: objek karyawan hanya untuk pemiliknya, slip gaji
+  // dan invoice butuh izin modul terkait.
+  const auth = c.get('auth');
+  const key = parsed.data.object_key;
+  const [top, second] = key.split('/');
+  let allowed = false;
+  if ((top === 'receipt' || top === 'selfie' || top === 'avatar') && second === auth.employee.id) {
+    allowed = true;
+  } else if (top === 'slips') {
+    allowed = hasPermission(auth.permissions, 'payroll', 'view');
+  } else if (top === 'invoices') {
+    allowed = hasPermission(auth.permissions, 'finance', 'view');
+  } else if (top === 'product') {
+    allowed = hasPermission(auth.permissions, 'inventory', 'view');
+  }
+  if (!allowed) {
+    return c.json({ error: 'Forbidden: Anda tidak berhak mengunduh objek ini.' }, 403);
+  }
+
   const downloadUrl = await createPresignedDownloadUrl({
-    key: parsed.data.object_key,
+    key,
     expiresIn: 3600,
   });
 
+  await writeAuditLog(getDb(), {
+    actorId: auth.employee.id,
+    platform: auth.platform,
+    module: 'storage',
+    action: 'presign_download',
+    entityId: key,
+    afterData: { category: top },
+  });
+
   return c.json({
-    object_key: parsed.data.object_key,
+    object_key: key,
     download_url: downloadUrl,
     expires_in: 3600,
   });

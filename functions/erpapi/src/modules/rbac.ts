@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import {
   createEmployeeSchema,
   updateEmployeeSchema,
@@ -184,6 +185,33 @@ router.patch('/employees/:id', requirePermission('rbac', 'update'), async (c) =>
   });
 
   return c.json({ employee: jsonSafe(updated) });
+});
+
+router.post('/employees/:id/claim-code', requirePermission('rbac', 'update'), async (c) => {
+  const id = c.req.param('id');
+  if (!id) return c.json({ error: 'Missing employee id.' }, 400);
+  const auth = c.get('auth');
+  const db = getDb();
+  const code = 'EK-' + crypto.randomBytes(9).toString('base64url').replace(/[^A-Za-z0-9]/g, '').slice(0, 10).toUpperCase();
+  const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+  const [row] = await db
+    .update(employees)
+    .set({ claim_code_hash: codeHash })
+    .where(eq(employees.id, id))
+    .returning({ id: employees.id, email: employees.email, full_name: employees.full_name });
+  if (!row) return c.json({ error: 'Employee not found.' }, 404);
+
+  await writeAuditLog(db, {
+    actorId: auth.employee.id,
+    platform: auth.platform,
+    module: 'rbac',
+    action: 'generate_claim_code',
+    entityId: id,
+    afterData: { email: row.email },
+  });
+
+  // Plaintext hanya dikembalikan sekali di sini; DB menyimpan hash saja.
+  return c.json({ code, email: row.email, full_name: row.full_name });
 });
 
 router.get('/audit-logs', requirePermission('audit', 'view'), async (c) => {

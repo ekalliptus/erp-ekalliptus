@@ -686,6 +686,11 @@ export const erpApi = {
   },
 
   profile: {
+    claimAccount: (code: string) =>
+      apiFetch<{ claimed: boolean; employee_code: string }>('/api/auth/claim', {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+      }),
     lookupUsername: (username: string) =>
       apiFetch<{ email: string | null }>('/api/auth/username-lookup', {
         method: 'POST',

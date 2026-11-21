@@ -108,18 +108,21 @@ async function main() {
   const staffRole = rolesRes.rows.find((r) => r.code === 'staff');
   assert.ok(ownerRole && staffRole, 'Seeded roles owner & staff must exist');
 
+  const ownerClaimCode = `EK-E2EOWN${ts % 1000000}`;
+  const staffClaimCode = `EK-E2ESTF${ts % 1000000}`;
+  const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
   const insOwner = await pool.query(
-    `INSERT INTO employees (employee_code, full_name, email, role_id, base_salary)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [`E2E-OWN-${ts}`, 'E2E Verification Owner', ownerEmail, ownerRole.id, '5000000'],
+    `INSERT INTO employees (employee_code, full_name, email, role_id, base_salary, claim_code_hash)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [`E2E-OWN-${ts}`, 'E2E Verification Owner', ownerEmail, ownerRole.id, '5000000', sha256(ownerClaimCode)],
   );
   const ownerEmpId = insOwner.rows[0].id;
   createdEmployeeIds.push(ownerEmpId);
 
   const insStaff = await pool.query(
-    `INSERT INTO employees (employee_code, full_name, email, role_id, base_salary)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [`E2E-STF-${ts}`, 'E2E Verification Staff', staffEmail, staffRole.id, '4000000'],
+    `INSERT INTO employees (employee_code, full_name, email, role_id, base_salary, claim_code_hash)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [`E2E-STF-${ts}`, 'E2E Verification Staff', staffEmail, staffRole.id, '4000000', sha256(staffClaimCode)],
   );
   const staffEmpId = insStaff.rows[0].id;
   createdEmployeeIds.push(staffEmpId);
@@ -137,12 +140,29 @@ async function main() {
   const ownerJwt = await signUpNeonAuth('E2E Owner', ownerEmail, password);
   const staffJwt = await signUpNeonAuth('E2E Staff', staffEmail, password);
 
+  const ownerClaim = await apiJson('/api/auth/claim', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({ code: ownerClaimCode }),
+  });
+  assert.equal(ownerClaim.status, 200, 'claim owner harus sukses: ' + JSON.stringify(ownerClaim.json));
+  const wrongCode = await apiJson('/api/auth/claim', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({ code: 'EK-WRONGCODE1' }),
+  });
+  assert.equal(wrongCode.status, 403, 'kode salah harus 403');
+  const staffClaim = await apiJson('/api/auth/claim', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({ code: staffClaimCode }),
+  });
+  assert.equal(staffClaim.status, 200, 'claim staff harus sukses: ' + JSON.stringify(staffClaim.json));
+  console.log('[PASS] Claim code activation (owner + staff) + wrong code rejected 403');
+
   const ownerMe = await apiJson('/api/me', ownerJwt);
   assert.equal(ownerMe.status, 200);
   assert.equal(ownerMe.json.role, 'owner');
   assert.equal(ownerMe.json.permissions.length, 36);
-  assert.ok(ownerMe.json.employee.auth_user_id, 'auth_user_id auto-linked on first verified JWT');
-  console.log('[PASS] Neon Auth JWT + RBAC auto-link GET /api/me -> 200 (36 permissions)');
+  assert.ok(ownerMe.json.employee.auth_user_id, 'auth_user_id set after claim');
+  console.log('[PASS] Neon Auth JWT + RBAC GET /api/me -> 200 (36 permissions)');
 
   const staffBlocked = await apiJson('/api/finance/accounts', staffJwt, {
     method: 'POST',

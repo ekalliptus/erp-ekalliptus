@@ -57,6 +57,7 @@ export const employees = pgTable('employees', {
   full_name: text('full_name').notNull(),
   email: text('email').notNull().unique(),
   username: text('username').unique(),
+  claim_code_hash: text('claim_code_hash'),
   phone: text('phone'),
   base_salary: bigint('base_salary', { mode: 'bigint' }).notNull().default(sql`0`),
   is_active: boolean('is_active').notNull().default(true),

@@ -1,6 +1,6 @@
 import type { PlatformKind, RoleCode } from '@ekalliptus/contracts';
 import { employees, permissions, role_permissions, roles } from '@ekalliptus/db';
-import { eq, isNull, and, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Context, Next } from 'hono';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { getDb } from '../db.js';
@@ -42,8 +42,24 @@ export function extractBearerToken(c: Context, allowQueryToken = false): string 
   return null;
 }
 
-export function createAuthMiddleware(allowQueryToken = false) {
-  return async (c: Context<AppEnv>, next: Next) => {
+/** Verifikasi JWT untuk endpoint publik yang tetap butuh identitas token. */
+export async function verifyAuthToken(
+  token: string,
+): Promise<{ sub: string; email?: string } | null> {
+  try {
+    const { jwks, issuer } = getJwtVerifier();
+    const { payload } = await jwtVerify(token, jwks, { issuer });
+    if (!payload.sub) return null;
+    return {
+      sub: payload.sub,
+      email: typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function createAuthMiddleware(allowQueryToken = false) {  return async (c: Context<AppEnv>, next: Next) => {
     const token = extractBearerToken(c, allowQueryToken);
     if (!token) {
       return c.json({ error: 'Unauthorized: missing Bearer token.' }, 401);
@@ -68,37 +84,18 @@ export function createAuthMiddleware(allowQueryToken = false) {
 
     const db = getDb();
 
-    let [emp] = await db
+    // Penautan akun auth ke karyawan HANYA lewat kode aktivasi
+    // (POST /api/auth/claim). Tidak ada auto-link email: akun Neon Auth
+    // terbuka tanpa verifikasi, sehingga pencocokan email bisa dibajak.
+    const [emp] = await db
       .select()
       .from(employees)
       .where(eq(employees.auth_user_id, sub))
       .limit(1);
 
-    if (!emp && tokenEmail) {
-      const [matchedByEmail] = await db
-        .select()
-        .from(employees)
-        .where(
-          and(
-            sql`lower(${employees.email}) = ${tokenEmail}`,
-            isNull(employees.auth_user_id),
-          ),
-        )
-        .limit(1);
-
-      if (matchedByEmail) {
-        const [linked] = await db
-          .update(employees)
-          .set({ auth_user_id: sub })
-          .where(and(eq(employees.id, matchedByEmail.id), isNull(employees.auth_user_id)))
-          .returning();
-        emp = linked ?? matchedByEmail;
-      }
-    }
-
     if (!emp) {
       return c.json(
-        { error: 'Forbidden: no active employee profile mapped to this account.' },
+        { error: 'Forbidden: belum ada karyawan yang terklaim untuk akun ini. Gunakan kode aktivasi.' },
         403,
       );
     }

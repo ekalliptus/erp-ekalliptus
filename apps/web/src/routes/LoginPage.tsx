@@ -12,6 +12,7 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
   const [mode, setMode] = useState<AuthMode>('signin');
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
+  const [claimCode, setClaimCode] = useState('');
   const [identity, setIdentity] = useState('');
   const [password, setPassword] = useState('');
   const [pending, setPending] = useState(false);
@@ -20,6 +21,7 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
 
   const nameId = useId();
   const usernameId = useId();
+  const claimId = useId();
   const emailId = useId();
   const passwordId = useId();
 
@@ -44,6 +46,10 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
     }
     if (mode === 'signup' && !USERNAME_PATTERN.test(username.trim().toLowerCase())) {
       setErrorMsg('Username 3-24 karakter: huruf kecil, angka, titik, atau garis bawah.');
+      return;
+    }
+    if (mode === 'signup' && claimCode.trim().length < 6) {
+      setErrorMsg('Kode aktivasi wajib diisi (diberikan HR/owner).');
       return;
     }
 
@@ -78,19 +84,37 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
           password,
           name: fullName.trim(),
         });
-        if (res.error) {
+        if (res.error && !/terdaftar|already|exists|duplicate/i.test(res.error.message ?? '')) {
           setErrorMsg(
             res.error.message || 'Gagal mendaftarkan akun. Pastikan email belum terdaftar.',
           );
           return;
         }
+        if (res.error) {
+          // Email sudah terdaftar di Neon Auth: coba masuk dengan sandi yang
+          // diketik untuk melanjutkan klaim (kasus aktivasi ulang).
+          const signInRes = await authClient.signIn.email({ email: identityValue, password });
+          if (signInRes.error) {
+            setErrorMsg('Email sudah terdaftar dan kata sandi tidak cocok untuk melanjutkan klaim.');
+            return;
+          }
+        }
         await getAccessToken(true);
+        try {
+          await erpApi.profile.claimAccount(claimCode.trim().toUpperCase());
+        } catch (claimErr) {
+          setInfoMsg(
+            claimErr instanceof Error
+              ? 'Akun auth dibuat, tapi klaim gagal: ' + claimErr.message
+              : 'Akun auth dibuat, tapi klaim gagal.',
+          );
+          return;
+        }
         try {
           await erpApi.profile.setUsername(username.trim().toLowerCase());
         } catch {
-          setInfoMsg('Akun aktif, tapi username gagal disimpan (mungkin sudah dipakai). Username bisa diatur ulang nanti.');
+          setInfoMsg('Akun aktif, tapi username gagal disimpan (mungkin sudah dipakai). Atur ulang nanti.');
         }
-        setInfoMsg('Akun Neon Auth aktif. Menghubungkan sesi ke profil MyEkalliptus...');
         onSuccess();
       }
     } catch (err) {
@@ -136,7 +160,7 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
             <p className="text-sm text-text-secondary">
               {mode === 'signin'
                 ? 'Autentikasi menggunakan akun kerja terdaftar di Neon Auth untuk mengakses modul ERP sesuai role.'
-                : 'Daftar menggunakan email karyawan yang sudah tercatat di direktori HR untuk penautan RBAC otomatis.'}
+                : 'Daftar dengan email karyawan + kode aktivasi dari HR/owner untuk menautkan profil RBAC Anda.'}
             </p>
           </div>
 
@@ -237,6 +261,26 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
                 />
                 <p className="text-[0.65rem] text-text-secondary">
                   3-24 karakter, huruf kecil, angka, titik, atau garis bawah. Dipakai untuk login tanpa email.
+                </p>
+              </div>
+            ) : null}
+
+            {mode === 'signup' ? (
+              <div className="space-y-1.5">
+                <label htmlFor={claimId} className="block text-xs font-semibold text-text-primary">
+                  Kode Aktivasi
+                </label>
+                <input
+                  id={claimId}
+                  type="text"
+                  required
+                  value={claimCode}
+                  onChange={(e) => setClaimCode(e.target.value)}
+                  placeholder="EK-XXXXXXXXXX (dari HR/owner)"
+                  className="h-10 w-full rounded-md border border-border-strong bg-surface px-3 text-sm text-text-primary focus:border-accent"
+                />
+                <p className="text-[0.65rem] text-text-secondary">
+                  Kode sekali pakai yang menautkan akun ini ke karyawan. Minta ke owner/HR.
                 </p>
               </div>
             ) : null}

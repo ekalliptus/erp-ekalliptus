@@ -19,6 +19,7 @@ class LoginScreen extends ConsumerStatefulWidget {
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _nameCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
+  final _claimCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
 
@@ -49,6 +50,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   void dispose() {
     _nameCtrl.dispose();
     _usernameCtrl.dispose();
+    _claimCtrl.dispose();
     _emailCtrl.dispose();
     _passCtrl.dispose();
     super.dispose();
@@ -76,6 +78,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       setState(() => _errorMsg = 'Username 3-24 karakter: huruf kecil, angka, titik, atau garis bawah.');
       return;
     }
+    final claimCode = _claimCtrl.text.trim().toUpperCase();
+    if (_isSignUp && claimCode.length < 6) {
+      setState(() => _errorMsg = 'Kode aktivasi wajib diisi (diberikan HR/owner).');
+      return;
+    }
 
     setState(() {
       _pending = true;
@@ -86,6 +93,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       final auth = ref.read(authServiceProvider);
       if (_isSignUp) {
         await auth.signUpEmail(name: name, email: email, password: pass);
+        try {
+          await ref.read(apiClientProvider).claimAccount(claimCode);
+        } catch (claimErr) {
+          if (mounted) {
+            setState(() => _errorMsg = 'Klaim gagal: ${claimErr.toString()}');
+          }
+          return;
+        }
         try {
           await ref.read(apiClientProvider).setUsername(username);
         } catch (_) {
@@ -232,6 +247,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             labelText: 'Username',
                             hintText: 'contoh: alul.studio',
                             helperText: '3-24 karakter: huruf kecil, angka, titik, garis bawah',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _claimCtrl,
+                          textInputAction: TextInputAction.next,
+                          decoration: const InputDecoration(
+                            labelText: 'Kode Aktivasi',
+                            hintText: 'EK-XXXXXXXXXX (dari HR/owner)',
+                            helperText: 'Kode sekali pakai yang menautkan akun ke karyawan',
                           ),
                         ),
                         const SizedBox(height: 12),

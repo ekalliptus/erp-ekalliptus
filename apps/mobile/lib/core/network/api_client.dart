@@ -121,6 +121,11 @@ class ApiClient {
     return res['email'] as String?;
   }
 
+  /// Klaim karyawan dengan kode aktivasi (endpoint publik + Bearer JWT).
+  Future<void> claimAccount(String code) async {
+    await _request<dynamic>('POST', '/api/auth/claim', data: {'code': code});
+  }
+
   /// Simpan username milik karyawan yang sedang login.
   Future<String?> setUsername(String username) async {
     final res = await _request<Map<String, dynamic>>(

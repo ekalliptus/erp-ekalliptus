@@ -207,6 +207,10 @@ export const setUsernameSchema = z.object({
   username: usernameBase,
 });
 
+export const claimAccountSchema = z.object({
+  code: z.string().trim().min(6).max(32),
+});
+
 export const createEmployeeSchema = z.object({
   employee_code: z.string().trim().min(2).max(32),
   full_name: z.string().trim().min(2).max(120),

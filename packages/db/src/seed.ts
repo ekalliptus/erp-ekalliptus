@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { config } from 'dotenv';
 import { and, eq, inArray } from 'drizzle-orm';
 import { createDirectDb } from './client.js';
@@ -159,6 +160,31 @@ export async function runSeed() {
             is_active: true,
           },
         });
+
+      // Kode aktivasi owner: dibuat hanya saat owner belum diklaim dan belum
+      // punya kode, lalu dicetak sekali di output seed. Simpan dengan aman.
+      const [ownerRow] = await tx
+        .select()
+        .from(employees)
+        .where(eq(employees.email, ownerEmail))
+        .limit(1);
+      if (ownerRow && !ownerRow.auth_user_id && !ownerRow.claim_code_hash) {
+        const claimCode = 'EK-' + randomBytes(9)
+          .toString('base64url')
+          .replace(/[^A-Za-z0-9]/g, '')
+          .slice(0, 10)
+          .toUpperCase();
+        const claimHash = createHash('sha256').update(claimCode).digest('hex');
+        await tx
+          .update(employees)
+          .set({ claim_code_hash: claimHash })
+          .where(eq(employees.id, ownerRow.id));
+        console.log('');
+        console.log('=== KODE AKTIVASI OWNER (sekali tampil, simpan aman) ===');
+        console.log('Email :', ownerEmail);
+        console.log('Kode  :', claimCode);
+        console.log('========================================================');
+      }
 
       const defaultAccounts = [
         { name: 'Kas Operasional', type: 'cash', account_number: 'KAS-01', balance: 0n },
