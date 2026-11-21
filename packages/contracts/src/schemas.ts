@@ -230,3 +230,8 @@ export const sealRealtimeSchema = z.object({
     'attendances',
   ]),
 });
+
+export const registerDeviceTokenSchema = z.object({
+  token: z.string().trim().min(32).max(4096),
+  platform: z.enum(['web', 'flutter']),
+});

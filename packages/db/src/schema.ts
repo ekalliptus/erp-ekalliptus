@@ -367,3 +367,53 @@ export const erp_events = pgTable(
   },
   (table) => [index('erp_events_channel_id_idx').on(table.channel, table.id.desc())],
 );
+
+export const device_tokens = pgTable(
+  'device_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    auth_user_id: text('auth_user_id')
+      .notNull()
+      .references(() => employees.auth_user_id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    platform: text('platform').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique('device_tokens_token_uq').on(table.token),
+    index('device_tokens_auth_user_idx').on(table.auth_user_id),
+    check('device_tokens_platform_chk', sql`platform IN ('web', 'flutter')`),
+  ],
+);
+
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    recipient_auth_user_id: text('recipient_auth_user_id')
+      .notNull()
+      .references(() => employees.auth_user_id, { onDelete: 'cascade' }),
+    actor_employee_id: uuid('actor_employee_id').references(() => employees.id, {
+      onDelete: 'cascade',
+    }),
+    module: text('module').notNull(),
+    event_type: text('event_type').notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    entity_id: text('entity_id'),
+    payload: jsonb('payload'),
+    pushed_at: timestamp('pushed_at', { withTimezone: true }),
+    read_at: timestamp('read_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('notifications_recipient_created_idx').on(
+      table.recipient_auth_user_id,
+      table.created_at.desc(),
+    ),
+    index('notifications_recipient_unread_idx')
+      .on(table.recipient_auth_user_id)
+      .where(sql`read_at IS NULL`),
+  ],
+);
