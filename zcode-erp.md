@@ -163,6 +163,16 @@ Seluruh misi utama dan iterasi lanjutan sudah selesai dibangun dan diverifikasi:
    - Domain `https://myekalliptus.pages.dev` didaftarkan ke **Neon Auth Trusted Domains** via `neon api -X POST /projects/raspy-wind-79044194/auth/domains -F "domain=https://myekalliptus.pages.dev" -F "auth_provider=better_auth"`. CORS API memang sudah mengizinkan origin apa pun (`origin: (origin) => origin || '*'`).
    - Probe origin trust (POST `/sign-in/email` dengan kredensial dummy dari origin produksi): HTTP `401 INVALID_EMAIL_OR_PASSWORD`, bukan penolakan origin, jadi alur login produksi siap dipakai.
    - **Belum diuji**: login end-to-end dengan akun owner sungguhan dari domain produksi (butuh kredensial kamu).
+10. **Notifikasi FCM Android + Web (21 Nov 2026)**:
+   - Tabel `device_tokens` + `notifications` (outbox `pushed_at`) di Neon Postgres; FK cascade ke employees.
+   - Backend: `services/fcm.ts` (JWT service account via `jose`, FCM HTTP v1, batch 5, prune token mati), `services/notify.ts` (insert dalam transaksi mutasi, sweep pasca-commit, `resolveModuleViewers` by RBAC view), plugin `/api/notifications/*` (register/unregister token, list, unread-count, read-all, read), hook di finance/inventory/attendance/payroll. `neon.ts` meng-inject `.secrets/fcm-service-account.json` bila ada (opsional).
+   - Web: lonceng notifikasi + SlideOver di AppShell, registrasi token web (service worker `firebase-messaging-sw.js`), affordance "Aktifkan notifikasi perangkat" saat izin masih default; firebase dipecah ke chunk `vendor-firebase` (89 kB gzip 17).
+   - Mobile: `NotificationRegistrationService` (murni, 4 test baru), `FcmAdapter`, hook di login + splash, bell + bottom sheet di FloatingNavShell, foreground message -> SnackBar + refresh badge; background/terminated -> notifikasi sistem default FCM.
+   - Verifikasi: `npm run build` exit 0, `flutter analyze` 0 issue, `flutter test` 12/12, `npm run verify:e2e` lulus dengan langkah notifikasi (token idempotent, list, read-all, unregister) + cleanup bersih; Pages terdeploy ulang.
+   - **Menunggu input kamu untuk push keluar (2 artefak, fitur sudah jalan mode in-app tanpa keduanya)**:
+     1. Service account JSON: Firebase Console -> Project settings -> Service accounts -> Generate new private key -> simpan sebagai `C:\dev\erp-ekalliptus\.secrets\fcm-service-account.json` (folder sudah di-gitignore), lalu `npm run deploy:neon`.
+     2. VAPID key: Firebase Console -> Project settings -> Cloud Messaging -> Web Push certificates -> Generate key pair -> taruh di `.env.local` sebagai `VITE_FCM_VAPID_KEY=...`, lalu rebuild + deploy Pages.
+   - Belum diuji runtime: lonceng berisi data + push keluar perangkat butuh login owner nyata (web/Android) dan rebuild APK debug ke emulator untuk uji FCM Android.
 
 ---
 
