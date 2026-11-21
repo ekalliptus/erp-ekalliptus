@@ -152,6 +152,10 @@ Seluruh misi utama dan iterasi lanjutan sudah selesai dibangun dan diverifikasi:
    - `flutter analyze`: `No issues found!`.
    - `flutter test`: `8/8` test lulus (`exit 0`).
    - Pemindaian karakter em dash (`\u2014`) di Web & Flutter source: `0` temuan.
+8. **Penyimpanan Git (21 Nov 2026)**:
+   - Seluruh arsitektur Neon di-commit sebagai `e606844` (`feat: rebuild ERP on Neon five-service stack`, 193 file, +27.081/−5.762) dan di-push ke `origin/main`.
+   - Folder `legacy/` (backend lama, docker infra, mobile-teknisi, web Next.js) dihapus; kode lama tetap ada di riwayat git (commit `b030932` s.d. `413cfb0`).
+   - Verifikasi sebelum commit: build web `exit 0`, Flutter analyze `0` issue, Flutter test `8/8`, pemindaian secrets bersih, `.env.local` tetap di luar git.
 
 ---
 
@@ -196,9 +200,10 @@ $env:PATH = "C:\Users\ekalliptus\bin;C:\Users\ekalliptus\AppData\Roaming\npm;C:\
 3. **Android Release Signing & Hardware Testing**:
    - `apps/mobile/android/app/build.gradle.kts` saat ini memakai debug signing untuk build `release`. Siapkan keystore rilis (`key.properties`) sebelum distribusi toko/internal.
    - Uji kamera selfie absensi, GPS nyata di luar emulator, biometrik sidik jari nyata (`local_auth`), dan barcode scanner (`mobile_scanner`) pada perangkat Android fisik.
-4. **Optimasi Bundle Vite & Warning Plugin Flutter**:
-   - `vite build` memberi catatan chunk utama `index-*.js` (`~763 kB`, `~214 kB` gzip). Bisa dipecah lagi lewat `build.rollupOptions.output.manualChunks` di `apps/web/vite.config.ts` (mis. vendor React/TanStack/Neon Auth).
-   - Gradle debug build mencatat warning Kotlin Gradle Plugin dari `package_info_plus` (`9.0.1` vs `10.2.2` tersedia). Dapat dievaluasi peningkatannya agar kompatibel dengan versi Flutter mendatang.
+4. **Optimasi Bundle Vite & Warning Plugin Flutter (SELESAI 21 Nov 2026)**:
+   - `manualChunks` ditambahkan di `apps/web/vite.config.ts` (vendor react / tanstack / neon dipecah dari chunk aplikasi). Hasil: chunk utama `index-*.js` turun dari `~763 kB` (`~214 kB` gzip) menjadi `~116 kB` (`~29 kB` gzip); vendor-react `223 kB`, vendor-neon `303 kB`, vendor-tanstack `175 kB`; tidak ada chunk di atas `500 kB` sehingga warning build hilang.
+   - Terverifikasi runtime via `vite preview` + browser: semua chunk `200`, boot aplikasi normal, redirect sesi ke `/login`, halaman login render utuh, toggle tema Light/Dark berfungsi, tanpa error console.
+   - Warning Kotlin `package_info_plus` (`9.0.1` vs `10.2.2`) sengaja TIDAK di-upgrade: paket itu dependensi transitive dari `geolocator_linux`, tidak dipakai langsung, dan `dependency_overrides` ke major 10 berisiko merusak resolusi geolocator. Revisit hanya saat geolocator menaikkan constraint-nya.
 5. **Pengembangan Modul Baru (Extensible Plugin Architecture)**:
    - Untuk menambah domain baru (seperti POS/Kasir, Ticketing Service, atau Project Management) tanpa mengubah inti Auth/RBAC:
      1. Tambah tabel domain ke `packages/db/src/schema.ts`.
