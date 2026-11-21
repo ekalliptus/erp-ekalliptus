@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { getDb, jsonSafe } from '../db.js';
 import { emitErpEvent, writeAuditLog } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/rbac.js';
+import { notifyUsersInTx, resolveModuleViewers } from '../services/notify.js';
 import type { AppEnv } from '../types.js';
 import type { ErpModulePlugin } from './plugin.js';
 
@@ -322,6 +323,18 @@ router.post('/movements', requirePermission('inventory', 'create'), async (c) =>
           low_stock: isLow,
         });
 
+        const inventoryViewers = await resolveModuleViewers(tx, 'inventory');
+        await notifyUsersInTx(tx, {
+          module: 'inventory',
+          eventType: 'stock_transferred',
+          title: 'Stok dipindahkan',
+          body: `${item.name} (${item.sku}): ${data.qty} unit dari ${wh.name} ke ${targetWh.name}.${isLow ? ` Stok sumber menipis (${nextSourceQty}).` : ''}`,
+          recipients: inventoryViewers,
+          excludeAuthUserId: auth.authUserId,
+          actorEmployeeId: auth.employee.id,
+          entityId: outMove.id,
+        });
+
         return { movement: outMove, paired: inMove, qty: nextSourceQty, low_stock_alert: isLow };
       }
 
@@ -379,6 +392,23 @@ router.post('/movements', requirePermission('inventory', 'create'), async (c) =>
         qty: nextQty,
         min_stock: item.min_stock,
         low_stock: isLow,
+      });
+
+      const inventoryViewers = await resolveModuleViewers(tx, 'inventory');
+      await notifyUsersInTx(tx, {
+        module: 'inventory',
+        eventType: isLow ? 'low_stock_alert' : 'stock_updated',
+        title:
+          data.movement_type === 'in'
+            ? 'Stok masuk dicatat'
+            : data.movement_type === 'out'
+              ? 'Stok keluar dicatat'
+              : 'Penyesuaian stok dicatat',
+        body: `${item.name} (${item.sku}) di ${wh.name}: ${nextQty} unit.${isLow ? ` Menyentuh batas minimum (${item.min_stock}).` : ''}`,
+        recipients: inventoryViewers,
+        excludeAuthUserId: auth.authUserId,
+        actorEmployeeId: auth.employee.id,
+        entityId: movement.id,
       });
 
       return { movement, qty: nextQty, low_stock_alert: isLow };
@@ -575,6 +605,18 @@ router.post('/purchase-orders/:id/receive', requirePermission('inventory', 'appr
         po_id: po.id,
         po_number: po.po_number,
         items_count: parsed.data.items.length,
+      });
+
+      const inventoryViewers = await resolveModuleViewers(tx, 'inventory');
+      await notifyUsersInTx(tx, {
+        module: 'inventory',
+        eventType: 'po_received',
+        title: 'PO diterima',
+        body: `Purchase order ${po.po_number} diterima (${parsed.data.items.length} item).`,
+        recipients: inventoryViewers,
+        excludeAuthUserId: auth.authUserId,
+        actorEmployeeId: auth.employee.id,
+        entityId: po.id,
       });
 
       return updatedPo;

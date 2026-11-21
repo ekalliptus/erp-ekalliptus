@@ -18,6 +18,7 @@ import { getDb, jsonSafe, txidExpr } from '../db.js';
 import { emitErpEvent, writeAuditLog } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { generateInvoicePdf } from '../services/pdf.js';
+import { formatRupiah, notifyUsersInTx, resolveModuleViewers } from '../services/notify.js';
 import { createPresignedDownloadUrl, uploadObject } from '../services/storage.js';
 import type { AppEnv } from '../types.js';
 import type { ErpModulePlugin } from './plugin.js';
@@ -279,6 +280,23 @@ router.post('/transactions', requirePermission('finance', 'create'), async (c) =
         balances: afterBalances,
       });
 
+      const financeViewers = await resolveModuleViewers(tx, 'finance');
+      await notifyUsersInTx(tx, {
+        module: 'finance',
+        eventType: 'transaction_recorded',
+        title:
+          data.type === 'income'
+            ? 'Kas masuk dicatat'
+            : data.type === 'expense'
+              ? 'Kas keluar dicatat'
+              : 'Transfer antar kas dicatat',
+        body: `${data.status === 'pending' ? 'Menunggu persetujuan: ' : ''}${sourceAcc.name}: ${formatRupiah(data.amount)}${data.description ? ` (${data.description})` : ''}`,
+        recipients: financeViewers,
+        excludeAuthUserId: auth.authUserId,
+        actorEmployeeId: auth.employee.id,
+        entityId: inserted.id,
+      });
+
       return inserted;
     });
 
@@ -372,6 +390,18 @@ router.post('/transactions/:id/approve', requirePermission('finance', 'approve')
       await emitErpEvent(tx, 'erp:finance', 'transaction_approved', {
         transaction_id: row.id,
         amount: row.amount.toString(),
+      });
+
+      const financeViewers = await resolveModuleViewers(tx, 'finance');
+      await notifyUsersInTx(tx, {
+        module: 'finance',
+        eventType: 'transaction_approved',
+        title: 'Transaksi disetujui',
+        body: `${row.type === 'transfer' ? 'Transfer' : row.type === 'income' ? 'Kas masuk' : 'Kas keluar'} ${formatRupiah(row.amount)} disetujui oleh ${auth.employee.full_name}.`,
+        recipients: financeViewers,
+        excludeAuthUserId: auth.authUserId,
+        actorEmployeeId: auth.employee.id,
+        entityId: row.id,
       });
 
       return posted;
@@ -468,6 +498,18 @@ router.post('/transactions/:id/void', requirePermission('finance', 'approve'), a
 
       await emitErpEvent(tx, 'erp:finance', 'transaction_voided', {
         transaction_id: row.id,
+      });
+
+      const financeViewers = await resolveModuleViewers(tx, 'finance');
+      await notifyUsersInTx(tx, {
+        module: 'finance',
+        eventType: 'transaction_voided',
+        title: 'Transaksi dibatalkan',
+        body: `${row.type === 'transfer' ? 'Transfer' : row.type === 'income' ? 'Kas masuk' : 'Kas keluar'} ${formatRupiah(row.amount)} dibatalkan oleh ${auth.employee.full_name}.`,
+        recipients: financeViewers,
+        excludeAuthUserId: auth.authUserId,
+        actorEmployeeId: auth.employee.id,
+        entityId: row.id,
       });
 
       return res;
@@ -709,6 +751,18 @@ router.post('/obligations/:id/pay', requirePermission('finance', 'approve'), asy
         obligation_id: ob.id,
         transaction_id: finTx.id,
         amount: data.amount.toString(),
+      });
+
+      const financeViewers = await resolveModuleViewers(tx, 'finance');
+      await notifyUsersInTx(tx, {
+        module: 'finance',
+        eventType: 'obligation_paid',
+        title: ob.kind === 'receivable' ? 'Piutang dibayar' : 'Hutang dibayar',
+        body: `${ob.counterparty_name}: ${formatRupiah(data.amount)} (sisa ${formatRupiah(updatedOb.amount - updatedOb.paid_amount)}).`,
+        recipients: financeViewers,
+        excludeAuthUserId: auth.authUserId,
+        actorEmployeeId: auth.employee.id,
+        entityId: ob.id,
       });
 
       return { obligation: updatedOb, transaction: finTx };

@@ -505,7 +505,41 @@ async function main() {
   assert.equal(liveRow.event_type, 'transaction_recorded');
   console.log('[PASS] Neon Realtime sealed query pushed live transaction commit over WebSocket');
 
-  console.log('\nALL 5 NEON SERVICES VERIFIED END-TO-END SUCCESSFULLY!');
+  // 10. Notifications: token upsert idempotent + list + read-all + unregister
+  const fakeToken = `e2e-fake-fcm-${ts}-${'x'.repeat(48)}`;
+  const reg1 = await apiJson('/api/notifications/tokens', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({ token: fakeToken, platform: 'web' }),
+  });
+  assert.equal(reg1.status, 200);
+  await apiJson('/api/notifications/tokens', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({ token: fakeToken, platform: 'web' }),
+  });
+  const tokRows = await pool.query('SELECT count(*)::int AS c FROM device_tokens WHERE token = $1', [fakeToken]);
+  assert.equal(tokRows.rows[0].c, 1, 'device token upsert must be idempotent');
+
+  const notifList = await apiJson('/api/notifications', ownerJwt);
+  assert.equal(notifList.status, 200);
+  assert.ok(Array.isArray(notifList.json.notifications), 'notification list must be an array');
+  const unreadBefore = notifList.json.unread;
+
+  const markAll = await apiJson('/api/notifications/read-all', ownerJwt, { method: 'POST' });
+  assert.equal(markAll.status, 200);
+  const unreadAfter = await apiJson('/api/notifications/unread-count', ownerJwt);
+  assert.equal(unreadAfter.status, 200);
+  assert.equal(unreadAfter.json.unread, 0, 'read-all must clear unread');
+  console.log(`[PASS] Notifications verified (token idempotent, list ok, unread ${unreadBefore} -> 0)`);
+
+  const unreg = await apiJson('/api/notifications/tokens/unregister', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({ token: fakeToken }),
+  });
+  assert.equal(unreg.status, 200);
+  const tokAfter = await pool.query('SELECT count(*)::int AS c FROM device_tokens WHERE token = $1', [fakeToken]);
+  assert.equal(tokAfter.rows[0].c, 0, 'unregister must delete the device token');
+
+  console.log('\nALL 5 NEON SERVICES + NOTIFICATIONS VERIFIED END-TO-END SUCCESSFULLY!');
 }
 
 async function cleanup() {

@@ -17,6 +17,7 @@ import { payrollPlugin } from './modules/payroll.js';
 import { registerErpPlugins } from './modules/plugin.js';
 import { rbacPlugin } from './modules/rbac.js';
 import { realtimePlugin } from './modules/realtime.js';
+import { notificationsPlugin } from './modules/notifications.js';
 import { storagePlugin } from './modules/storage.js';
 import type { AppEnv } from './types.js';
 
@@ -38,6 +39,7 @@ app.get('/api/health', (c) => {
     service: 'ekalliptus-erpapi',
     branch: process.env.NEON_BRANCH || 'production',
     realtime_configured: Boolean(process.env.NEON_REALTIME_SECRET || process.env.ERP_REALTIME_SECRET),
+    notifications_configured: Boolean(process.env.FCM_SERVICE_ACCOUNT_JSON),
     timestamp: new Date().toISOString(),
   });
 });
@@ -111,6 +113,7 @@ registerErpPlugins(apiRouter, [
   rbacPlugin,
   storagePlugin,
   realtimePlugin,
+  notificationsPlugin,
 ]);
 
 app.route('/api', apiRouter);

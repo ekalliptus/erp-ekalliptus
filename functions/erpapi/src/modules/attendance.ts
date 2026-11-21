@@ -11,6 +11,7 @@ import { Hono } from 'hono';
 import { getDb, jsonSafe } from '../db.js';
 import { emitErpEvent, writeAuditLog } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/rbac.js';
+import { notifyUsersInTx, resolveModuleViewers } from '../services/notify.js';
 import type { AppEnv } from '../types.js';
 import type { ErpModulePlugin } from './plugin.js';
 
@@ -209,6 +210,18 @@ router.post('/clock-in', requirePermission('attendance', 'create'), async (c) =>
       late_minutes: lateMinutes,
     });
 
+    const attendanceViewers = await resolveModuleViewers(tx, 'attendance');
+    await notifyUsersInTx(tx, {
+      module: 'attendance',
+      eventType: 'clock_in',
+      title: 'Absensi masuk tercatat',
+      body: `${auth.employee.full_name} clock-in${status === 'late' ? ` terlambat ${lateMinutes} menit` : ''}.`,
+      recipients: attendanceViewers,
+      excludeAuthUserId: auth.authUserId,
+      actorEmployeeId: auth.employee.id,
+      entityId: inserted.id,
+    });
+
     return inserted;
   });
 
@@ -287,6 +300,18 @@ router.post('/clock-out', requirePermission('attendance', 'create'), async (c) =
       overtime_minutes: overtimeMinutes,
     });
 
+    const attendanceViewers = await resolveModuleViewers(tx, 'attendance');
+    await notifyUsersInTx(tx, {
+      module: 'attendance',
+      eventType: 'clock_out',
+      title: 'Absensi pulang tercatat',
+      body: `${auth.employee.full_name} clock-out${overtimeMinutes > 0 ? ` (lembur ${overtimeMinutes} menit)` : ''}.`,
+      recipients: attendanceViewers,
+      excludeAuthUserId: auth.authUserId,
+      actorEmployeeId: auth.employee.id,
+      entityId: row.id,
+    });
+
     return row;
   });
 
@@ -329,6 +354,18 @@ router.post('/leave', requirePermission('attendance', 'create'), async (c) => {
       employee_name: auth.employee.full_name,
       attendance_date: data.attendance_date,
       status: data.status,
+    });
+
+    const attendanceViewers = await resolveModuleViewers(tx, 'attendance');
+    await notifyUsersInTx(tx, {
+      module: 'attendance',
+      eventType: 'leave_requested',
+      title: 'Pengajuan izin baru',
+      body: `${auth.employee.full_name} mengajukan izin untuk ${data.attendance_date}.`,
+      recipients: attendanceViewers,
+      excludeAuthUserId: auth.authUserId,
+      actorEmployeeId: auth.employee.id,
+      entityId: row.id,
     });
 
     return row;
@@ -376,6 +413,24 @@ router.post('/:id/approve', requirePermission('attendance', 'approve'), async (c
       employee_id: row.employee_id,
       approval_status: row.approval_status,
     });
+
+    const [owner] = await tx
+      .select({ auth_user_id: employees.auth_user_id })
+      .from(employees)
+      .where(eq(employees.id, row.employee_id))
+      .limit(1);
+    if (owner?.auth_user_id) {
+      await notifyUsersInTx(tx, {
+        module: 'attendance',
+        eventType: 'attendance_approval_updated',
+        title: row.approval_status === 'approved' ? 'Izin Anda disetujui' : 'Izin Anda ditolak',
+        body: `Pengajuan izin ${row.attendance_date} telah di-${row.approval_status === 'approved' ? 'setujui' : 'tolak'} oleh ${auth.employee.full_name}.`,
+        recipients: [owner.auth_user_id],
+        excludeAuthUserId: auth.authUserId,
+        actorEmployeeId: auth.employee.id,
+        entityId: row.id,
+      });
+    }
 
     return row;
   });

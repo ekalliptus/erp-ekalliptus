@@ -18,6 +18,7 @@ import { getDb, jsonSafe, txidExpr } from '../db.js';
 import { emitErpEvent, writeAuditLog } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { generatePayrollSlipPdf } from '../services/pdf.js';
+import { formatRupiah, notifyUsersInTx } from '../services/notify.js';
 import { createPresignedDownloadUrl, uploadObject } from '../services/storage.js';
 import type { AppEnv } from '../types.js';
 import type { ErpModulePlugin } from './plugin.js';
@@ -308,6 +309,7 @@ router.post('/runs/:id/pay', requirePermission('payroll', 'approve'), async (c) 
       const items = await tx
         .select({
           id: payroll_items.id,
+          auth_user_id: employees.auth_user_id,
           employee_id: payroll_items.employee_id,
           base_salary: payroll_items.base_salary,
           allowances: payroll_items.allowances,
@@ -419,6 +421,19 @@ router.post('/runs/:id/pay', requirePermission('payroll', 'approve'), async (c) 
         period_start: run.period_start,
         period_end: run.period_end,
       });
+
+      for (const item of items) {
+        if (!item.auth_user_id || item.auth_user_id === auth.authUserId) continue;
+        await notifyUsersInTx(tx, {
+          module: 'payroll',
+          eventType: 'payroll_paid',
+          title: 'Gaji dibayarkan',
+          body: `Slip gaji periode ${run.period_start} s/d ${run.period_end}: ${formatRupiah(item.net_salary)} (slip PDF tersedia).`,
+          recipients: [item.auth_user_id],
+          actorEmployeeId: auth.employee.id,
+          entityId: item.id,
+        });
+      }
 
       return { run: paidRun, items, finance_transaction_id: finTxId, txid };
     });
