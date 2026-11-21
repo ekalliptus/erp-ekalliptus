@@ -17,4 +17,19 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Vendor dipecah dari chunk aplikasi supaya cache browser tidak hangus
+        // setiap kali kode aplikasi berubah (react, tanstack, neon berubah jarang).
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('@tanstack')) return 'vendor-tanstack';
+          if (id.includes('@neon')) return 'vendor-neon';
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'vendor-react';
+          return undefined;
+        },
+      },
+    },
+  },
 });
