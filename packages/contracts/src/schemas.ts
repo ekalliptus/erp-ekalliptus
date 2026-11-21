@@ -191,10 +191,27 @@ export const updateRolePermissionsSchema = z.object({
   permission_ids: z.array(z.string().uuid()),
 });
 
+const usernameBase = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(3)
+  .max(24)
+  .regex(/^[a-z0-9_.]+$/, 'username hanya boleh huruf kecil, angka, titik, dan garis bawah');
+
+export const usernameLookupSchema = z.object({
+  username: usernameBase,
+});
+
+export const setUsernameSchema = z.object({
+  username: usernameBase,
+});
+
 export const createEmployeeSchema = z.object({
   employee_code: z.string().trim().min(2).max(32),
   full_name: z.string().trim().min(2).max(120),
   email: z.string().email().transform((v) => v.toLowerCase()),
+  username: usernameBase.optional().nullable(),
   phone: z.string().trim().max(32).optional().nullable(),
   role_id: z.string().uuid(),
   base_salary: bigintNonNegativeSchema,
@@ -202,6 +219,7 @@ export const createEmployeeSchema = z.object({
 
 export const updateEmployeeSchema = z.object({
   full_name: z.string().trim().min(2).max(120).optional(),
+  username: usernameBase.optional().nullable(),
   phone: z.string().trim().max(32).optional().nullable(),
   role_id: z.string().uuid().optional(),
   base_salary: bigintNonNegativeSchema.optional(),

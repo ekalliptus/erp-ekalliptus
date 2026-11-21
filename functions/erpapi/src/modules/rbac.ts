@@ -136,6 +136,7 @@ router.post('/employees', requirePermission('rbac', 'create'), async (c) => {
       employee_code: parsed.data.employee_code,
       full_name: parsed.data.full_name,
       email: parsed.data.email,
+      username: parsed.data.username ?? null,
       phone: parsed.data.phone ?? null,
       role_id: parsed.data.role_id,
       base_salary: parsed.data.base_salary,

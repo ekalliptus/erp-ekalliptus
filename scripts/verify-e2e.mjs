@@ -539,6 +539,30 @@ async function main() {
   const tokAfter = await pool.query('SELECT count(*)::int AS c FROM device_tokens WHERE token = $1', [fakeToken]);
   assert.equal(tokAfter.rows[0].c, 0, 'unregister must delete the device token');
 
+  // 11. Username: set on own profile, lookup resolves to own email, duplicate rejected
+  const meRes = await apiJson('/api/me', ownerJwt);
+  assert.equal(meRes.status, 200);
+  const myEmail = meRes.json.employee.email;
+  const uname = `e2euser${ts % 100000}`;
+  const setUn = await apiJson('/api/me/username', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({ username: uname }),
+  });
+  assert.equal(setUn.status, 200);
+  assert.equal(setUn.json.username, uname);
+  const lookup = await apiJson('/api/auth/username-lookup', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({ username: uname }),
+  });
+  assert.equal(lookup.status, 200);
+  assert.equal(lookup.json.email, myEmail, 'username lookup must resolve to own email');
+  const dup = await apiJson('/api/me/username', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({ username: uname }),
+  });
+  assert.equal(dup.status, 409, 'duplicate username must be rejected with 409');
+  console.log('[PASS] Username login flow verified (set, lookup, duplicate 409)');
+
   console.log('\nALL 5 NEON SERVICES + NOTIFICATIONS VERIFIED END-TO-END SUCCESSFULLY!');
 }
 

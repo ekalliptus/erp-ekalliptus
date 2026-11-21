@@ -1,11 +1,13 @@
+import { setUsernameSchema, usernameLookupSchema } from '@ekalliptus/contracts';
 import {
   attendances,
+  employees,
   finance_accounts,
   inventory_items,
   inventory_stocks,
   payroll_runs,
 } from '@ekalliptus/db';
-import { eq, lte, sql } from 'drizzle-orm';
+import { and, eq, lte, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { getDb, jsonSafe } from './db.js';
@@ -44,16 +46,59 @@ app.get('/api/health', (c) => {
   });
 });
 
+// Lookup username ke email untuk login. Endpoint publik (di luar guard auth)
+// karena dipakai sebelum sesi ada; catatan: tanpa rate limit khusus, bergantung
+// pada proteksi level Neon Functions.
+app.post('/api/auth/username-lookup', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = usernameLookupSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+  const [row] = await getDb()
+    .select({ email: employees.email })
+    .from(employees)
+    .where(and(eq(employees.username, parsed.data.username), eq(employees.is_active, true)))
+    .limit(1);
+  return c.json({ email: row?.email ?? null });
+});
+
+
 const sseAuth = createAuthMiddleware(true);
 const apiAuth = createAuthMiddleware(false);
 
 app.use('/api/realtime/events', sseAuth);
+app.use('/api/auth/username-lookup', (c, next) => next());
 app.use('/api/*', async (c, next) => {
-  if (c.req.path === '/api/health' || c.req.path === '/api/realtime/events') {
+  if (
+    c.req.path === '/api/health' ||
+    c.req.path === '/api/realtime/events' ||
+    c.req.path === '/api/auth/username-lookup'
+  ) {
     await next();
     return;
   }
   return apiAuth(c, next);
+});
+
+// Simpan username milik karyawan yang sedang login (dipakai form aktivasi).
+app.post('/api/me/username', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = setUsernameSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+  const auth = c.get('auth');
+  try {
+    const [updated] = await getDb()
+      .update(employees)
+      .set({ username: parsed.data.username })
+      .where(eq(employees.id, auth.employee.id))
+      .returning({ id: employees.id, username: employees.username });
+    return c.json({ username: updated?.username ?? null });
+  } catch (err) {
+    const pgErr = err as { code?: string; cause?: { code?: string } };
+    if (pgErr?.code === '23505' || pgErr?.cause?.code === '23505') {
+      return c.json({ error: 'Username sudah dipakai karyawan lain.' }, 409);
+    }
+    throw err;
+  }
 });
 
 app.get('/api/me', async (c) => {
