@@ -1,23 +1,33 @@
 {
-  "name": "myekalliptus-frontend",
+  "name": "@ekalliptus/web",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev --hostname 0.0.0.0 --port 3100",
-    "build": "next build",
-    "start": "next start --hostname 0.0.0.0 --port 3100",
-    "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/money.test.ts"
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "next": "^15.5.12",
+    "@ekalliptus/contracts": "*",
+    "@neon/auth": "^0.8.2",
+    "@neon/realtime": "^0.2.1",
+    "@neon/realtime-drizzle": "^0.2.0",
+    "@neon/realtime-react": "^0.2.0",
+    "@tanstack/react-query": "^5.75.0",
+    "@tanstack/react-router": "^1.120.0",
+    "@tanstack/react-table": "^8.21.3",
+    "lucide-react": "^0.511.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/react": "^19.1.0",
-    "@types/react-dom": "^19.1.0",
-    "typescript": "^5.8.0"
+    "@tailwindcss/vite": "^4.1.7",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "tailwindcss": "^4.1.7",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
   }
 }

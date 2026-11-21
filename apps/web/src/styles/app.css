@@ -1,0 +1,173 @@
+@import "./tokens.css";
+@import "tailwindcss";
+
+:root {
+  --ep-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ep-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+@layer base {
+  html,
+  body {
+    background-color: var(--ep-canvas);
+    color: var(--ep-text-primary);
+    font-family: var(--ep-font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--ep-font-display);
+  }
+
+  button:not(:disabled),
+  a[href],
+  select:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ep-accent);
+    outline-offset: 2px;
+  }
+}
+
+.tabular-nums {
+  font-family: var(--ep-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Native View Transitions API full-viewport theme reveal */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  z-index: 9999;
+}
+
+/* Named color fallback only while switching theme in browsers without View Transitions */
+html.ep-theme-fallback,
+html.ep-theme-fallback body,
+html.ep-theme-fallback header,
+html.ep-theme-fallback aside,
+html.ep-theme-fallback main,
+html.ep-theme-fallback section,
+html.ep-theme-fallback button,
+html.ep-theme-fallback input {
+  transition:
+    background-color 260ms var(--ep-ease-out),
+    color 260ms var(--ep-ease-out),
+    border-color 260ms var(--ep-ease-out);
+}
+
+.ep-theme-toggle {
+  transition:
+    transform 120ms var(--ep-ease-out),
+    background-color 180ms ease,
+    border-color 180ms ease;
+}
+
+.ep-theme-toggle:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.ep-theme-icon {
+  transition:
+    transform 220ms var(--ep-ease-out),
+    opacity 220ms var(--ep-ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ep-theme-toggle:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .ep-theme-toggle:hover:not(:disabled) .ep-theme-icon-active {
+    transform: rotate(12deg) scale(1.06);
+  }
+}
+
+@keyframes ep-shimmer-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.ep-shimmer {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--ep-surface-subtle);
+}
+
+.ep-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.55) 50%,
+    transparent 100%
+  );
+  animation: ep-shimmer-sweep 1.45s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+.dark .ep-shimmer::after {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.07) 50%,
+    transparent 100%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ep-shimmer::after {
+    animation: none;
+    opacity: 0;
+  }
+
+  .ep-theme-toggle,
+  .ep-theme-toggle:active:not(:disabled),
+  .ep-theme-toggle:hover:not(:disabled) {
+    transform: none;
+  }
+
+  .ep-theme-icon {
+    transition: opacity 180ms ease-out;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

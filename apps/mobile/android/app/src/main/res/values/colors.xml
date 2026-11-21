@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ep_splash_bg_light">#F7F7F5</color>
+    <color name="ep_splash_bg_dark">#0C0E0D</color>
+    <color name="ep_splash_icon_bg">#FFFFFF</color>
+    <color name="ic_launcher_background">#FFFFFF</color>
+</resources>

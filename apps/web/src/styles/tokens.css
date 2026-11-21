@@ -1,0 +1,92 @@
+/* Generated from packages/tokens/design-tokens.json by sync-tokens.mjs. */
+:root {
+  color-scheme: light;
+  --ep-canvas: #F7F7F5;
+  --ep-surface: #FFFFFF;
+  --ep-surface-subtle: #EFF2EE;
+  --ep-border: #E2E6E1;
+  --ep-border-strong: #CBD3CA;
+  --ep-text-primary: #111815;
+  --ep-text-secondary: #4B5751;
+  --ep-text-muted: #7A8780;
+  --ep-accent: #0F766E;
+  --ep-accent-hover: #115E59;
+  --ep-accent-soft: #CCFBF1;
+  --ep-on-accent: #FFFFFF;
+  --ep-success: #15803D;
+  --ep-success-soft: #DCFCE7;
+  --ep-warning: #B45309;
+  --ep-warning-soft: #FEF3C7;
+  --ep-danger: #DC2626;
+  --ep-danger-soft: #FEE2E2;
+  --ep-info: #0369A1;
+  --ep-info-soft: #E0F2FE;
+  --ep-radius-sm: 6px;
+  --ep-radius-md: 10px;
+  --ep-radius-lg: 14px;
+  --ep-radius-xl: 20px;
+  --ep-radius-pill: 9999px;
+  --ep-space-xs: 4px;
+  --ep-space-sm: 8px;
+  --ep-space-md: 16px;
+  --ep-space-lg: 24px;
+  --ep-space-xl: 32px;
+  --ep-font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --ep-font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --ep-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+}
+
+.dark {
+  color-scheme: dark;
+  --ep-canvas: #0C0E0D;
+  --ep-surface: #141816;
+  --ep-surface-subtle: #1B211E;
+  --ep-border: #242C28;
+  --ep-border-strong: #34403A;
+  --ep-text-primary: #F1F5F3;
+  --ep-text-secondary: #B4C0B9;
+  --ep-text-muted: #7D8B84;
+  --ep-accent: #10B981;
+  --ep-accent-hover: #34D399;
+  --ep-accent-soft: #064E3B;
+  --ep-on-accent: #042F2E;
+  --ep-success: #22C55E;
+  --ep-success-soft: #052E16;
+  --ep-warning: #F59E0B;
+  --ep-warning-soft: #451A03;
+  --ep-danger: #F87171;
+  --ep-danger-soft: #450A0A;
+  --ep-info: #38BDF8;
+  --ep-info-soft: #082F49;
+}
+
+@theme inline {
+  --color-canvas: var(--ep-canvas);
+  --color-surface: var(--ep-surface);
+  --color-surface-subtle: var(--ep-surface-subtle);
+  --color-border: var(--ep-border);
+  --color-border-strong: var(--ep-border-strong);
+  --color-text-primary: var(--ep-text-primary);
+  --color-text-secondary: var(--ep-text-secondary);
+  --color-text-muted: var(--ep-text-muted);
+  --color-accent: var(--ep-accent);
+  --color-accent-hover: var(--ep-accent-hover);
+  --color-accent-soft: var(--ep-accent-soft);
+  --color-on-accent: var(--ep-on-accent);
+  --color-success: var(--ep-success);
+  --color-success-soft: var(--ep-success-soft);
+  --color-warning: var(--ep-warning);
+  --color-warning-soft: var(--ep-warning-soft);
+  --color-danger: var(--ep-danger);
+  --color-danger-soft: var(--ep-danger-soft);
+  --color-info: var(--ep-info);
+  --color-info-soft: var(--ep-info-soft);
+  --radius-sm: var(--ep-radius-sm);
+  --radius-md: var(--ep-radius-md);
+  --radius-lg: var(--ep-radius-lg);
+  --radius-xl: var(--ep-radius-xl);
+  --radius-pill: var(--ep-radius-pill);
+  --font-display: var(--ep-font-display);
+  --font-sans: var(--ep-font-sans);
+  --font-mono: var(--ep-font-mono);
+}

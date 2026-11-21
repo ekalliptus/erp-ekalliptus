@@ -1,0 +1,72 @@
+{
+  "meta": {
+    "name": "Eucalyptus Precision",
+    "version": "1.0.0"
+  },
+  "colors": {
+    "light": {
+      "canvas": "#F7F7F5",
+      "surface": "#FFFFFF",
+      "surfaceSubtle": "#EFF2EE",
+      "border": "#E2E6E1",
+      "borderStrong": "#CBD3CA",
+      "textPrimary": "#111815",
+      "textSecondary": "#4B5751",
+      "textMuted": "#7A8780",
+      "accent": "#0F766E",
+      "accentHover": "#115E59",
+      "accentSoft": "#CCFBF1",
+      "onAccent": "#FFFFFF",
+      "success": "#15803D",
+      "successSoft": "#DCFCE7",
+      "warning": "#B45309",
+      "warningSoft": "#FEF3C7",
+      "danger": "#DC2626",
+      "dangerSoft": "#FEE2E2",
+      "info": "#0369A1",
+      "infoSoft": "#E0F2FE"
+    },
+    "dark": {
+      "canvas": "#0C0E0D",
+      "surface": "#141816",
+      "surfaceSubtle": "#1B211E",
+      "border": "#242C28",
+      "borderStrong": "#34403A",
+      "textPrimary": "#F1F5F3",
+      "textSecondary": "#B4C0B9",
+      "textMuted": "#7D8B84",
+      "accent": "#10B981",
+      "accentHover": "#34D399",
+      "accentSoft": "#064E3B",
+      "onAccent": "#042F2E",
+      "success": "#22C55E",
+      "successSoft": "#052E16",
+      "warning": "#F59E0B",
+      "warningSoft": "#451A03",
+      "danger": "#F87171",
+      "dangerSoft": "#450A0A",
+      "info": "#38BDF8",
+      "infoSoft": "#082F49"
+    }
+  },
+  "typography": {
+    "display": "Plus Jakarta Sans",
+    "body": "Inter",
+    "mono": "JetBrains Mono",
+    "tabularNums": true
+  },
+  "radius": {
+    "sm": 6,
+    "md": 10,
+    "lg": 14,
+    "xl": 20,
+    "pill": 9999
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "xl": 32
+  }
+}

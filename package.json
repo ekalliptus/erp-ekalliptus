@@ -1,30 +1,37 @@
 {
-  "name": "myekalliptus",
-  "version": "0.1.0",
+  "name": "ekalliptus-erp",
+  "version": "1.0.0",
   "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "functions/*",
+    "apps/web"
+  ],
   "scripts": {
-    "setup": "npm ci --prefix backend && npm ci --prefix apps/web",
-    "build": "npm run build --prefix backend && npm run build --prefix apps/web",
-    "dev:backend": "npm run dev --prefix backend",
-    "dev:frontend": "npm run dev --prefix apps/web",
-    "db:migrate": "npm run migrate --prefix backend",
-    "db:seed": "npm run seed:admin --prefix backend",
-    "db:sample": "npm run seed:sample --prefix backend",
-    "seed:demo": "node infra/seed-demo.mjs",
-    "test": "npm test --prefix backend && npm test --prefix apps/web",
-    "test:integration": "node infra/verify.mjs",
-    "local:up": "node infra/local.mjs",
-    "local:down": "node infra/local.mjs --down",
-    "compose:up": "docker compose up --build -d",
-    "compose:down": "docker compose down"
+    "tokens:sync": "node packages/tokens/scripts/sync-tokens.mjs",
+    "db:push": "drizzle-kit push --force",
+    "db:generate": "drizzle-kit generate",
+    "db:seed": "tsx packages/db/src/seed.ts",
+    "build:db": "tsc -p packages/db/tsconfig.json --noEmit",
+    "build:contracts": "tsc -p packages/contracts/tsconfig.json --noEmit",
+    "build:api": "tsc -p functions/erpapi/tsconfig.json --noEmit",
+    "build:web": "npm run build --workspace=apps/web",
+    "build": "npm run tokens:sync && npm run build:db && npm run build:contracts && npm run build:api && npm run build:web",
+    "deploy:neon": "neon deploy --env .env.local",
+    "verify:e2e": "node scripts/verify-e2e.mjs"
   },
   "engines": {
     "node": ">=22"
   },
-  "devDependencies": {
-    "embedded-postgres": "17.9.0-beta.16"
+  "dependencies": {
+    "@neon/config": "^1.14.5",
+    "@neon/env": "^2.1.8"
   },
-  "allowScripts": {
-    "@embedded-postgres/windows-x64@17.9.0-beta.17": true
+  "devDependencies": {
+    "dotenv": "^16.4.7",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.3"
   }
 }
