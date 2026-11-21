@@ -25,6 +25,7 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('@tanstack')) return 'vendor-tanstack';
+          if (id.includes('firebase')) return 'vendor-firebase';
           if (id.includes('@neon')) return 'vendor-neon';
           if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'vendor-react';
           return undefined;

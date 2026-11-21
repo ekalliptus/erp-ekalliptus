@@ -343,6 +343,23 @@ export type RealtimeFeed =
   | 'inventory_stocks'
   | 'attendances';
 
+export interface NotificationItem {
+  id: string;
+  recipient_auth_user_id: string;
+  module: string;
+  event_type: string;
+  title: string;
+  body: string;
+  entity_id: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationsResponse {
+  notifications: NotificationItem[];
+  unread: number;
+}
+
 export const erpApi = {
   fetchMe: () => apiFetch<MeResponse>('/api/me'),
 
@@ -640,6 +657,30 @@ export const erpApi = {
       apiFetch<SealedLiveQuery<Record<string, unknown>>>('/api/realtime/seal', {
         method: 'POST',
         body: JSON.stringify({ feed }),
+      }),
+  },
+
+  notifications: {
+    list: (limit = 30) =>
+      apiFetch<NotificationsResponse>(`/api/notifications?limit=${limit}`),
+    unreadCount: () => apiFetch<{ unread: number }>('/api/notifications/unread-count'),
+    registerToken: (body: { token: string; platform: 'web' | 'flutter' }) =>
+      apiFetch<{ registered: boolean }>('/api/notifications/tokens', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    unregisterToken: (token: string) =>
+      apiFetch<{ unregistered: number }>('/api/notifications/tokens/unregister', {
+        method: 'POST',
+        body: JSON.stringify({ token }),
+      }),
+    markRead: (id: string) =>
+      apiFetch<{ marked: number }>(`/api/notifications/${id}/read`, {
+        method: 'POST',
+      }),
+    markAllRead: () =>
+      apiFetch<{ marked: number }>('/api/notifications/read-all', {
+        method: 'POST',
       }),
   },
 };

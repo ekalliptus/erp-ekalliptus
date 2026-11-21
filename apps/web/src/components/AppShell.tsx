@@ -22,6 +22,7 @@ import type { MeResponse, RealtimeFeed } from '../lib/api.ts';
 import { authClient, clearAccessTokenCache } from '../lib/auth.ts';
 import { ErpRealtimeSubscriber, type LiveFeedStatus } from '../lib/realtime.tsx';
 import { CommandPalette } from './CommandPalette.tsx';
+import { NotificationsBell } from './NotificationsBell.tsx';
 import { ThemeToggleButton } from './ThemeToggleButton.tsx';
 
 interface NavEntry {
@@ -397,6 +398,8 @@ export function AppShell({
               />
               <span>{realtimePillLabel}</span>
             </div>
+
+            <NotificationsBell />
 
             <ThemeToggleButton />
 

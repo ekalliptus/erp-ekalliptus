@@ -17,6 +17,7 @@ import {
 import { ErrorState } from './components/StateViews.tsx';
 import { ApiError, erpApi, type MeResponse } from './lib/api.ts';
 import { authClient, clearAccessTokenCache } from './lib/auth.ts';
+import { enableWebNotifications } from './lib/notifications.ts';
 import { LoginPage } from './routes/LoginPage.tsx';
 
 const DashboardPage = lazy(() =>
@@ -109,6 +110,13 @@ function RootComponent() {
     enabled: hasUser,
     retry: false,
   });
+
+  useEffect(() => {
+    if (!meQuery.data) return;
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      void enableWebNotifications().catch(() => null);
+    }
+  }, [meQuery.data]);
 
   useEffect(() => {
     if (sessionHook.isPending) return;
