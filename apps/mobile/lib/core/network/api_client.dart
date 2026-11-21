@@ -85,6 +85,52 @@ class ApiClient {
     await _request<dynamic>(method, path, data: payload);
   }
 
+  /// Permintaan tanpa JWT, untuk endpoint publik pra-login.
+  Future<T> _publicRequest<T>(
+    String method,
+    String path, {
+    dynamic data,
+  }) async {
+    try {
+      final res = await _dio.request<T>(
+        path,
+        data: data,
+        options: Options(
+          method: method,
+          headers: {'X-Platform': 'flutter'},
+        ),
+      );
+      return res.data as T;
+    } on DioException catch (e) {
+      final body = e.response?.data;
+      var msg = e.message ?? 'Koneksi ke server MyEkalliptus gagal.';
+      if (body is Map<String, dynamic> && body['error'] != null) {
+        msg = body['error'].toString();
+      }
+      throw ApiException(msg, statusCode: e.response?.statusCode);
+    }
+  }
+
+  /// Resolusi username ke email kerja untuk login tanpa email.
+  Future<String?> lookupUsernameEmail(String username) async {
+    final res = await _publicRequest<Map<String, dynamic>>(
+      'POST',
+      '/api/auth/username-lookup',
+      data: {'username': username},
+    );
+    return res['email'] as String?;
+  }
+
+  /// Simpan username milik karyawan yang sedang login.
+  Future<String?> setUsername(String username) async {
+    final res = await _request<Map<String, dynamic>>(
+      'POST',
+      '/api/me/username',
+      data: {'username': username},
+    );
+    return res['username'] as String?;
+  }
+
   Future<ErpProfile> fetchMe() async {
     final res = await _request<Map<String, dynamic>>('GET', '/api/me');
     return ErpProfile.fromJson(res);

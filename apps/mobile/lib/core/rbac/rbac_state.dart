@@ -39,6 +39,7 @@ class ErpProfile {
   final String employeeCode;
   final String fullName;
   final String email;
+  final String? username;
   final String roleCode;
   final String roleName;
   final Set<String> permissions;
@@ -49,6 +50,7 @@ class ErpProfile {
     required this.employeeCode,
     required this.fullName,
     required this.email,
+    required this.username,
     required this.roleCode,
     required this.roleName,
     required this.permissions,
@@ -63,6 +65,7 @@ class ErpProfile {
       employeeCode: (emp['employee_code'] ?? '').toString(),
       fullName: (emp['full_name'] ?? '').toString(),
       email: (emp['email'] ?? '').toString(),
+      username: emp['username']?.toString(),
       roleCode: (json['role'] ?? 'staff').toString(),
       roleName: (json['role_name'] ?? 'Karyawan').toString(),
       permissions: permList.map((e) => e.toString()).toSet(),

@@ -85,6 +85,7 @@ export interface EmployeeProfile {
   employee_code: string;
   full_name: string;
   email: string;
+  username: string | null;
   phone: string | null;
   base_salary: string;
   is_active: boolean;
@@ -681,6 +682,19 @@ export const erpApi = {
     markAllRead: () =>
       apiFetch<{ marked: number }>('/api/notifications/read-all', {
         method: 'POST',
+      }),
+  },
+
+  profile: {
+    lookupUsername: (username: string) =>
+      apiFetch<{ email: string | null }>('/api/auth/username-lookup', {
+        method: 'POST',
+        body: JSON.stringify({ username }),
+      }),
+    setUsername: (username: string) =>
+      apiFetch<{ username: string | null }>('/api/me/username', {
+        method: 'POST',
+        body: JSON.stringify({ username }),
       }),
   },
 };

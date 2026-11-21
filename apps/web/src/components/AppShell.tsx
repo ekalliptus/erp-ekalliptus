@@ -289,6 +289,12 @@ export function AppShell({
               <p className="truncate text-text-secondary">
                 {me.role_name} ({me.employee.employee_code})
               </p>
+              {me.employee.username ? (
+                <p className="truncate text-text-secondary" title="Username untuk login">
+                  @
+                  {me.employee.username}
+                </p>
+              ) : null}
             </div>
           ) : (
             <p className="text-center text-xs font-bold text-text-primary" title={me.employee.full_name}>

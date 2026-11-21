@@ -18,12 +18,16 @@ class LoginScreen extends ConsumerStatefulWidget {
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _nameCtrl = TextEditingController();
+  final _usernameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
 
   bool _isSignUp = false;
   bool _pending = false;
   String? _errorMsg;
+
+  bool _isValidUsername(String value) =>
+      RegExp(r'^[a-z0-9_.]{3,24}$').hasMatch(value);
 
   /// Registrasi token FCM best-effort: kegagalan tidak pernah menggagalkan login.
   Future<void> _registerNotifications() async {
@@ -44,6 +48,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   void dispose() {
     _nameCtrl.dispose();
+    _usernameCtrl.dispose();
     _emailCtrl.dispose();
     _passCtrl.dispose();
     super.dispose();
@@ -53,9 +58,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final email = _emailCtrl.text.trim().toLowerCase();
     final pass = _passCtrl.text;
     final name = _nameCtrl.text.trim();
+    final username = _usernameCtrl.text.trim().toLowerCase();
 
-    if (!email.contains('@')) {
-      setState(() => _errorMsg = 'Masukkan alamat email kerja yang valid.');
+    if (email.isEmpty) {
+      setState(() => _errorMsg = 'Masukkan email kerja atau username.');
       return;
     }
     if (pass.length < 8) {
@@ -64,6 +70,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
     if (_isSignUp && name.length < 2) {
       setState(() => _errorMsg = 'Nama lengkap wajib diisi minimal 2 karakter.');
+      return;
+    }
+    if (_isSignUp && !_isValidUsername(username)) {
+      setState(() => _errorMsg = 'Username 3-24 karakter: huruf kecil, angka, titik, atau garis bawah.');
       return;
     }
 
@@ -76,8 +86,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       final auth = ref.read(authServiceProvider);
       if (_isSignUp) {
         await auth.signUpEmail(name: name, email: email, password: pass);
+        try {
+          await ref.read(apiClientProvider).setUsername(username);
+        } catch (_) {
+          if (mounted) {
+            setState(() => _errorMsg =
+                'Akun aktif, tapi username gagal disimpan (mungkin sudah dipakai). Coba lagi nanti.');
+          }
+        }
       } else {
-        await auth.signInEmail(email: email, password: pass);
+        var signInEmail = email;
+        if (!email.contains('@')) {
+          final resolved = await ref.read(apiClientProvider).lookupUsernameEmail(email);
+          if (resolved == null || resolved.isEmpty) {
+            setState(() => _errorMsg = 'Username tidak ditemukan. Gunakan email kerja untuk masuk.');
+            return;
+          }
+          signInEmail = resolved;
+        }
+        await auth.signInEmail(email: signInEmail, password: pass);
       }
       ref.invalidate(sessionProfileProvider);
       await _registerNotifications();
@@ -197,13 +224,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ),
                         const SizedBox(height: 12),
                       ],
+                      if (_isSignUp) ...[
+                        TextField(
+                          controller: _usernameCtrl,
+                          textInputAction: TextInputAction.next,
+                          decoration: const InputDecoration(
+                            labelText: 'Username',
+                            hintText: 'contoh: alul.studio',
+                            helperText: '3-24 karakter: huruf kecil, angka, titik, garis bawah',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       TextField(
                         controller: _emailCtrl,
                         keyboardType: TextInputType.emailAddress,
                         textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(
-                          labelText: 'Email Kerja',
-                          hintText: AppConfig.supportEmail,
+                        decoration: InputDecoration(
+                          labelText: _isSignUp ? 'Email Kerja' : 'Email atau Username',
+                          hintText: _isSignUp ? AppConfig.supportEmail : 'nama@ekalliptus.com atau username',
                         ),
                       ),
                       const SizedBox(height: 12),

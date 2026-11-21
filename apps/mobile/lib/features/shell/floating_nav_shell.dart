@@ -177,7 +177,9 @@ class FloatingNavShell extends ConsumerWidget {
                 children: [
                   const Text('MyEkalliptus'),
                   Text(
-                    '${profile.roleName} (${profile.employeeCode})',
+                    profile.username != null && profile.username!.isNotEmpty
+                        ? '${profile.roleName} (${profile.employeeCode}) · @${profile.username}'
+                        : '${profile.roleName} (${profile.employeeCode})',
                     style: Theme.of(context).textTheme.bodySmall,
                     overflow: TextOverflow.ellipsis,
                   ),

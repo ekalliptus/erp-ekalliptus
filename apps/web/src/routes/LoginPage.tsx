@@ -2,19 +2,24 @@ import { KeyRound, UserPlus } from 'lucide-react';
 import { useId, useState, type FormEvent } from 'react';
 import { ThemeToggleButton } from '../components/ThemeToggleButton.tsx';
 import { authClient, clearAccessTokenCache, getAccessToken } from '../lib/auth.ts';
+import { erpApi } from '../lib/api.ts';
 
 type AuthMode = 'signin' | 'signup';
+
+const USERNAME_PATTERN = /^[a-z0-9_.]{3,24}$/;
 
 export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
   const [mode, setMode] = useState<AuthMode>('signin');
   const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
+  const [identity, setIdentity] = useState('');
   const [password, setPassword] = useState('');
   const [pending, setPending] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
   const nameId = useId();
+  const usernameId = useId();
   const emailId = useId();
   const passwordId = useId();
 
@@ -23,9 +28,10 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
     setErrorMsg(null);
     setInfoMsg(null);
 
-    const trimmedEmail = email.trim().toLowerCase();
-    if (!trimmedEmail || !trimmedEmail.includes('@')) {
-      setErrorMsg('Masukkan alamat email kerja yang valid.');
+    const identityValue = identity.trim().toLowerCase();
+    const isEmailIdentity = identityValue.includes('@');
+    if (!identityValue) {
+      setErrorMsg('Masukkan email kerja atau username.');
       return;
     }
     if (password.length < 8) {
@@ -36,18 +42,31 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
       setErrorMsg('Nama lengkap wajib diisi minimal 2 karakter.');
       return;
     }
+    if (mode === 'signup' && !USERNAME_PATTERN.test(username.trim().toLowerCase())) {
+      setErrorMsg('Username 3-24 karakter: huruf kecil, angka, titik, atau garis bawah.');
+      return;
+    }
 
     setPending(true);
     try {
       clearAccessTokenCache();
       if (mode === 'signin') {
+        let signInEmail = identityValue;
+        if (!isEmailIdentity) {
+          const lookup = await erpApi.profile.lookupUsername(identityValue);
+          if (!lookup.email) {
+            setErrorMsg('Username tidak ditemukan. Gunakan email kerja untuk masuk.');
+            return;
+          }
+          signInEmail = lookup.email;
+        }
         const res = await authClient.signIn.email({
-          email: trimmedEmail,
+          email: signInEmail,
           password,
         });
         if (res.error) {
           setErrorMsg(
-            res.error.message || 'Email atau kata sandi tidak cocok dengan akun Neon Auth.',
+            res.error.message || 'Email/username atau kata sandi tidak cocok dengan akun Neon Auth.',
           );
           return;
         }
@@ -55,7 +74,7 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
         onSuccess();
       } else {
         const res = await authClient.signUp.email({
-          email: trimmedEmail,
+          email: identityValue,
           password,
           name: fullName.trim(),
         });
@@ -65,8 +84,13 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
           );
           return;
         }
-        setInfoMsg('Akun Neon Auth aktif. Menghubungkan sesi ke profil MyEkalliptus...');
         await getAccessToken(true);
+        try {
+          await erpApi.profile.setUsername(username.trim().toLowerCase());
+        } catch {
+          setInfoMsg('Akun aktif, tapi username gagal disimpan (mungkin sudah dipakai). Username bisa diatur ulang nanti.');
+        }
+        setInfoMsg('Akun Neon Auth aktif. Menghubungkan sesi ke profil MyEkalliptus...');
         onSuccess();
       }
     } catch (err) {
@@ -196,18 +220,39 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
               </div>
             ) : null}
 
+            {mode === 'signup' ? (
+              <div className="space-y-1.5">
+                <label htmlFor={usernameId} className="block text-xs font-semibold text-text-primary">
+                  Username
+                </label>
+                <input
+                  id={usernameId}
+                  type="text"
+                  autoComplete="username"
+                  required
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="contoh: alul.studio"
+                  className="h-10 w-full rounded-md border border-border-strong bg-surface px-3 text-sm text-text-primary focus:border-accent"
+                />
+                <p className="text-[0.65rem] text-text-secondary">
+                  3-24 karakter, huruf kecil, angka, titik, atau garis bawah. Dipakai untuk login tanpa email.
+                </p>
+              </div>
+            ) : null}
+
             <div className="space-y-1.5">
               <label htmlFor={emailId} className="block text-xs font-semibold text-text-primary">
-                Email Kerja
+                {mode === 'signin' ? 'Email atau Username' : 'Email Kerja'}
               </label>
               <input
                 id={emailId}
-                type="email"
-                autoComplete="email"
+                type="text"
+                autoComplete="username email"
                 required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="nama@ekalliptus.com"
+                value={identity}
+                onChange={(e) => setIdentity(e.target.value)}
+                placeholder={mode === 'signin' ? 'nama@ekalliptus.com atau username' : 'nama@ekalliptus.com'}
                 className="h-10 w-full rounded-md border border-border-strong bg-surface px-3 text-sm text-text-primary focus:border-accent"
               />
             </div>

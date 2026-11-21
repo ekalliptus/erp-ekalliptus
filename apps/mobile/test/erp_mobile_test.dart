@@ -38,6 +38,7 @@ void main() {
         employeeCode: 'EMP-001',
         fullName: 'Owner Ekalliptus',
         email: 'alul@ekalliptus.com',
+        username: 'alul',
         roleCode: role,
         roleName: role.toUpperCase(),
         permissions: perms.toSet(),
