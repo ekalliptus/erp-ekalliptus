@@ -180,6 +180,13 @@ Seluruh misi utama dan iterasi lanjutan sudah selesai dibangun dan diverifikasi:
    - Profil: sidebar web menampilkan `@username` di bawah role, app bar mobile menampilkan `@username` setelah kode karyawan.
    - Verifikasi: build exit 0, Flutter analyze 0 issue, Flutter test 12/12, E2E 14 PASS termasuk langkah username (set, lookup, duplikat 409). Terdeploy: Functions + Pages (`49d9fda4`). Commit `965444c` + `71ffe0f`.
    - Pelajaran: route `/api/me/username` awalnya terdaftar sebelum middleware auth sehingga 500 (auth context kosong); urutan registrasi route di Hono harus setelah `app.use('/api/*', apiAuth)`.
+12. **Audit Keamanan + Perbaikan (21 Nov 2026)**:
+   - **KRITIS diperbaiki**: auto-link email di middleware auth DIHAPUS. Sebelumnya siapa pun bisa membajak karyawan yang belum aktif dengan mendaftar di Neon Auth pakai email karyawan itu (signup terbuka tanpa verifikasi email; terbukti via E2E curl). Aktivasi kini butuh **kode aktivasi sekali pakai** dari owner/HR: `POST /api/rbac/employees/:id/claim-code` (izin rbac:update, plaintext tampil sekali, DB simpan SHA-256) dan `POST /api/auth/claim` (publik + Bearer, rate limit 5/menit, kode salah 403, sudah diklaim 409). Akun yang sudah diklaim aman karena middleware hanya mencocokkan `auth_user_id`.
+   - **HIGH diperbaiki**: `POST /api/storage/presign-download` kini menegakkan ACL: `receipt|selfie|avatar/<empId>/` hanya pemiliknya, `slips/` butuh `payroll:view`, `invoices/` butuh `finance:view`, `product/` butuh `inventory:view`, plus audit log tiap presign. Sebelumnya karyawan mana pun bisa mengunduh slip gaji/selfie orang lain.
+   - **MEDIUM diperbaiki**: CORS API kini allowlist (`my.ekalliptus.com`, `myekalliptus.pages.dev`, `localhost:5173`, override via `WEB_ALLOWED_ORIGINS`); username-lookup rate limit 10/menit (best-effort per instance).
+   - Seed mencetak kode aktivasi owner sekali saat bootstrap (owner belum diklaim + tanpa kode). Owner `alul@ekalliptus.com` saat ini SUDAH TERKLAIM (via auto-link lama sebelum dihapus; klaim diasumsikan sah karena dilakukan pemilik dari host ini).
+   - Verifikasi: build exit 0, Flutter analyze 0 + test 12/12, E2E 15 PASS (termasuk klaim owner/staff, kode salah 403). Commit `2593c89`.
+   - Sisa yang disarankan: kebijakan sandi/magic-link Neon Auth, review CORS `ekalliptus-web`, rate limit global via proxy, dan uji penetrasi ulang setelah fitur stabil.
 
 ---
 
