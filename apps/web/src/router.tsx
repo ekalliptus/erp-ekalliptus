@@ -44,6 +44,9 @@ const AttendancePage = lazyWithRetry(() =>
 const PayrollPage = lazyWithRetry(() =>
   import('./routes/PayrollPage.tsx').then((m) => ({ default: m.PayrollPage })),
 );
+const PortfolioPage = lazyWithRetry(() =>
+  import('./routes/PortfolioPage.tsx').then((m) => ({ default: m.PortfolioPage })),
+);
 const RbacPage = lazyWithRetry(() =>
   import('./routes/RbacPage.tsx').then((m) => ({ default: m.RbacPage })),
 );
@@ -271,6 +274,17 @@ const payrollRoute = createRoute({
   ),
 });
 
+const portfolioRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/portfolio',
+  component: () => (
+    <AuthenticatedFrame
+      skeletonVariant="portfolio"
+      renderPage={(me) => <PortfolioPage me={me} />}
+    />
+  ),
+});
+
 const rbacRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/rbac',
@@ -311,6 +325,7 @@ const routeTree = rootRoute.addChildren([
   inventoryRoute,
   attendanceRoute,
   payrollRoute,
+  portfolioRoute,
   rbacRoute,
   auditRoute,
   profileRoute,

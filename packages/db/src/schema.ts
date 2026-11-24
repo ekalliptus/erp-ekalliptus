@@ -526,3 +526,72 @@ export const pos_sale_items = pgTable(
     check('pos_sale_items_line_total_pos_chk', sql`line_total > 0`),
   ],
 );
+
+export const portfolio_projects = pgTable(
+  'portfolio_projects',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    slug: text('slug').notNull().unique(),
+    title: text('title').notNull(),
+    tagline: text('tagline').notNull().default(''),
+    summary: text('summary').notNull().default(''),
+    category: text('category').notNull().default('website'),
+    offer_type: text('offer_type').notNull().default('hybrid'),
+    availability_status: text('availability_status').notNull().default('available'),
+    price_type: text('price_type').notNull().default('fixed'),
+    price_amount: bigint('price_amount', { mode: 'bigint' }),
+    original_price_amount: bigint('original_price_amount', { mode: 'bigint' }),
+    currency: text('currency').notNull().default('IDR'),
+    client_name: text('client_name'),
+    delivery_estimate: text('delivery_estimate'),
+    demo_url: text('demo_url'),
+    cover_image_key: text('cover_image_key'),
+    cover_image_url: text('cover_image_url'),
+    gallery_image_keys: jsonb('gallery_image_keys').$type<string[]>().notNull().default([]),
+    gallery_image_urls: jsonb('gallery_image_urls').$type<string[]>().notNull().default([]),
+    tech_stack: jsonb('tech_stack').$type<string[]>().notNull().default([]),
+    highlights: jsonb('highlights').$type<string[]>().notNull().default([]),
+    whatsapp_prefill: text('whatsapp_prefill'),
+    is_featured: boolean('is_featured').notNull().default(false),
+    is_published: boolean('is_published').notNull().default(false),
+    sort_order: integer('sort_order').notNull().default(0),
+    published_at: timestamp('published_at', { withTimezone: true }),
+    created_by: uuid('created_by').references(() => employees.id),
+    updated_by: uuid('updated_by').references(() => employees.id),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('portfolio_projects_pub_order_idx').on(
+      table.is_published,
+      table.is_featured,
+      table.sort_order,
+      table.created_at.desc(),
+    ),
+    index('portfolio_projects_category_idx').on(table.category),
+    check(
+      'portfolio_projects_category_chk',
+      sql`category IN ('website', 'mobile_app', 'erp_system', 'ui_ux', 'automation', 'other')`,
+    ),
+    check(
+      'portfolio_projects_offer_type_chk',
+      sql`offer_type IN ('ready_to_buy', 'custom_similar', 'hybrid')`,
+    ),
+    check(
+      'portfolio_projects_availability_chk',
+      sql`availability_status IN ('available', 'custom_only', 'sold')`,
+    ),
+    check(
+      'portfolio_projects_price_type_chk',
+      sql`price_type IN ('fixed', 'starting_from', 'negotiable')`,
+    ),
+    check(
+      'portfolio_projects_price_nonneg_chk',
+      sql`price_amount IS NULL OR price_amount >= 0`,
+    ),
+    check(
+      'portfolio_projects_orig_price_nonneg_chk',
+      sql`original_price_amount IS NULL OR original_price_amount >= 0`,
+    ),
+  ],
+);

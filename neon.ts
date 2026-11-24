@@ -38,6 +38,12 @@ export default defineConfig({
       env: {
         ERP_REALTIME_SECRET: { value: process.env.NEON_REALTIME_SECRET, required: true },
         FCM_SERVICE_ACCOUNT_JSON: { value: process.env.FCM_SERVICE_ACCOUNT_JSON, required: false },
+        WEB_ALLOWED_ORIGINS: {
+          value:
+            process.env.WEB_ALLOWED_ORIGINS ||
+            'https://my.ekalliptus.com,https://ekalliptus.com',
+          required: false,
+        },
       },
     },
   },

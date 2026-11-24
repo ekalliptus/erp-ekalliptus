@@ -124,6 +124,11 @@ export function createAuthMiddleware(allowQueryToken = false) {  return async (c
       .where(eq(role_permissions.role_id, roleRow.id));
 
     const permissionSet = new Set(permRows.map((p) => `${p.module}:${p.action}`));
+    if (roleRow.code === 'owner') {
+      for (const action of ['view', 'create', 'update', 'delete', 'approve', 'export'] as const) {
+        permissionSet.add(`portfolio:${action}`);
+      }
+    }
 
     c.set('auth', {
       authUserId: sub,

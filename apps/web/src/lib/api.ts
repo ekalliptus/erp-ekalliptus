@@ -1,4 +1,10 @@
-import type { RoleCode } from '@ekalliptus/contracts';
+import type {
+  PortfolioAvailabilityStatus,
+  PortfolioCategory,
+  PortfolioOfferType,
+  PortfolioPriceType,
+  RoleCode,
+} from '@ekalliptus/contracts';
 import type { SealedLiveQuery } from '@neon/realtime/client';
 import { WEB_APP_BUILD_NUMBER, WEB_APP_VERSION } from './appVersion.ts';
 import { clearAccessTokenCache, getAccessToken } from './auth.ts';
@@ -750,6 +756,68 @@ export interface AppVersionCheckResponse {
   releases: AppReleaseRow[];
 }
 
+export interface PortfolioProjectRow {
+  id: string;
+  slug: string;
+  title: string;
+  tagline: string;
+  summary: string;
+  category: PortfolioCategory;
+  offer_type: PortfolioOfferType;
+  availability_status: PortfolioAvailabilityStatus;
+  price_type: PortfolioPriceType;
+  price_amount: string | null;
+  original_price_amount: string | null;
+  currency: string;
+  client_name: string | null;
+  delivery_estimate: string | null;
+  demo_url: string | null;
+  cover_image_key: string | null;
+  cover_image_url: string | null;
+  cover_preview_url: string | null;
+  gallery_image_keys: string[];
+  gallery_image_urls: string[];
+  gallery_preview_urls: string[];
+  tech_stack: string[];
+  highlights: string[];
+  whatsapp_prefill: string | null;
+  is_featured: boolean;
+  is_published: boolean;
+  sort_order: number;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+  public_url: string;
+}
+
+export interface CreatePortfolioPayload {
+  title: string;
+  slug?: string;
+  tagline?: string;
+  summary?: string;
+  category: PortfolioCategory;
+  offer_type: PortfolioOfferType;
+  availability_status: PortfolioAvailabilityStatus;
+  price_type: PortfolioPriceType;
+  price_amount?: number | string | null;
+  original_price_amount?: number | string | null;
+  client_name?: string | null;
+  delivery_estimate?: string | null;
+  demo_url?: string | null;
+  cover_image_key?: string | null;
+  cover_image_url?: string | null;
+  gallery_image_keys?: string[];
+  gallery_image_urls?: string[];
+  tech_stack?: string[];
+  highlights?: string[];
+  whatsapp_prefill?: string | null;
+  is_featured?: boolean;
+  is_published?: boolean;
+  sort_order?: number;
+}
+
+export type UpdatePortfolioPayload = Partial<CreatePortfolioPayload>;
+
 export const erpApi = {
   fetchMe: () => apiFetch<MeResponse>('/api/me'),
 
@@ -1178,7 +1246,7 @@ export const erpApi = {
 
   storage: {
     presignUpload: (body: {
-      category: 'receipt' | 'selfie' | 'product' | 'avatar' | 'release';
+      category: 'receipt' | 'selfie' | 'product' | 'avatar' | 'release' | 'portfolio';
       filename: string;
       content_type: string;
     }) =>
@@ -1191,6 +1259,31 @@ export const erpApi = {
         '/api/storage/presign-download',
         { method: 'POST', body: JSON.stringify({ object_key }) },
       ),
+  },
+
+  portfolio: {
+    list: (params?: { status?: 'all' | 'published' | 'draft'; category?: string; q?: string }) => {
+      const qs = new URLSearchParams();
+      if (params?.status && params.status !== 'all') qs.set('status', params.status);
+      if (params?.category && params.category !== 'all') qs.set('category', params.category);
+      if (params?.q?.trim()) qs.set('q', params.q.trim());
+      const suffix = qs.toString() ? `?${qs.toString()}` : '';
+      return apiFetch<{ items: PortfolioProjectRow[] }>(`/api/portfolio${suffix}`);
+    },
+    create: (body: CreatePortfolioPayload) =>
+      apiFetch<{ item: PortfolioProjectRow }>('/api/portfolio', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    update: (id: string, body: UpdatePortfolioPayload) =>
+      apiFetch<{ item: PortfolioProjectRow }>(`/api/portfolio/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    remove: (id: string) =>
+      apiFetch<{ ok: boolean; id: string }>(`/api/portfolio/${id}`, {
+        method: 'DELETE',
+      }),
   },
 
   realtime: {
@@ -1316,7 +1409,7 @@ export const erpApi = {
 };
 
 export async function uploadFileViaPresign(
-  category: 'receipt' | 'selfie' | 'product' | 'avatar' | 'release',
+  category: 'receipt' | 'selfie' | 'product' | 'avatar' | 'release' | 'portfolio',
   file: File,
 ): Promise<string> {
   const contentType = file.type || 'application/octet-stream';

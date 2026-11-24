@@ -310,7 +310,7 @@ export const updateEmployeeSchema = z.object({
 });
 
 export const presignUploadSchema = z.object({
-  category: z.enum(['receipt', 'selfie', 'product', 'avatar', 'release']),
+  category: z.enum(['receipt', 'selfie', 'product', 'avatar', 'release', 'portfolio']),
   filename: z.string().trim().min(1).max(160),
   content_type: z.string().trim().min(3).max(120),
 });
@@ -423,3 +423,123 @@ export const createPosSaleSchema = z.object({
 export const voidPosSaleSchema = z.object({
   reason: z.string().trim().max(300).optional().nullable(),
 });
+
+export const PORTFOLIO_CATEGORIES = [
+  'website',
+  'mobile_app',
+  'erp_system',
+  'ui_ux',
+  'automation',
+  'other',
+] as const;
+
+export const PORTFOLIO_OFFER_TYPES = [
+  'ready_to_buy',
+  'custom_similar',
+  'hybrid',
+] as const;
+
+export const PORTFOLIO_AVAILABILITY_STATUSES = [
+  'available',
+  'custom_only',
+  'sold',
+] as const;
+
+export const PORTFOLIO_PRICE_TYPES = [
+  'fixed',
+  'starting_from',
+  'negotiable',
+] as const;
+
+export const portfolioCategorySchema = z.enum(PORTFOLIO_CATEGORIES);
+export const portfolioOfferTypeSchema = z.enum(PORTFOLIO_OFFER_TYPES);
+export const portfolioAvailabilitySchema = z.enum(PORTFOLIO_AVAILABILITY_STATUSES);
+export const portfolioPriceTypeSchema = z.enum(PORTFOLIO_PRICE_TYPES);
+
+export const portfolioSlugSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(2)
+  .max(96)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Slug hanya boleh huruf kecil, angka, dan tanda hubung.');
+
+export const httpsUrlSchema = z
+  .string()
+  .trim()
+  .max(500)
+  .refine((raw) => {
+    try {
+      const parsed = new URL(raw);
+      return parsed.protocol === 'https:' && parsed.hostname.length > 0;
+    } catch {
+      return false;
+    }
+  }, 'URL harus memakai https:// yang valid.');
+
+const portfolioFieldsShape = {
+  title: z.string().trim().min(3).max(140),
+  slug: portfolioSlugSchema.optional(),
+  tagline: z.string().trim().max(220).default(''),
+  summary: z.string().trim().max(5000).default(''),
+  category: portfolioCategorySchema.default('website'),
+  offer_type: portfolioOfferTypeSchema.default('hybrid'),
+  availability_status: portfolioAvailabilitySchema.default('available'),
+  price_type: portfolioPriceTypeSchema.default('fixed'),
+  price_amount: bigintNonNegativeSchema.nullable().optional(),
+  original_price_amount: bigintNonNegativeSchema.nullable().optional(),
+  client_name: z.string().trim().max(120).nullable().optional(),
+  delivery_estimate: z.string().trim().max(80).nullable().optional(),
+  demo_url: httpsUrlSchema.nullable().optional(),
+  cover_image_key: z.string().trim().min(3).max(255).nullable().optional(),
+  cover_image_url: httpsUrlSchema.nullable().optional(),
+  gallery_image_keys: z.array(z.string().trim().min(3).max(255)).max(8).default([]),
+  gallery_image_urls: z.array(httpsUrlSchema).max(8).default([]),
+  tech_stack: z.array(z.string().trim().min(1).max(40)).max(16).default([]),
+  highlights: z.array(z.string().trim().min(1).max(200)).max(16).default([]),
+  whatsapp_prefill: z.string().trim().max(300).nullable().optional(),
+  is_featured: z.boolean().default(false),
+  is_published: z.boolean().default(false),
+  sort_order: z.number().int().min(-999).max(9999).default(0),
+};
+
+export const createPortfolioProjectSchema = z
+  .object(portfolioFieldsShape)
+  .refine(
+    (data) => {
+      if (data.price_type !== 'negotiable') {
+        return (
+          data.price_amount !== null &&
+          data.price_amount !== undefined &&
+          data.price_amount > 0n
+        );
+      }
+      return true;
+    },
+    { message: 'Harga project wajib diisi lebih dari 0 untuk tipe harga ini.' },
+  );
+
+export const updatePortfolioProjectSchema = z
+  .object(portfolioFieldsShape)
+  .partial()
+  .refine((data) => Object.values(data).some((v) => v !== undefined), {
+    message: 'Minimal satu field portofolio harus diperbarui.',
+  })
+  .refine(
+    (data) => {
+      if (
+        data.price_type &&
+        data.price_type !== 'negotiable' &&
+        data.price_amount !== undefined
+      ) {
+        return data.price_amount !== null && data.price_amount > 0n;
+      }
+      return true;
+    },
+    { message: 'Harga project wajib lebih dari 0 untuk tipe harga ini.' },
+  );
+
+export type PortfolioCategory = (typeof PORTFOLIO_CATEGORIES)[number];
+export type PortfolioOfferType = (typeof PORTFOLIO_OFFER_TYPES)[number];
+export type PortfolioAvailabilityStatus = (typeof PORTFOLIO_AVAILABILITY_STATUSES)[number];
+export type PortfolioPriceType = (typeof PORTFOLIO_PRICE_TYPES)[number];

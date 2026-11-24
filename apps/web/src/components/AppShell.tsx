@@ -4,6 +4,7 @@ import { RealtimeProvider } from '@neon/realtime-react';
 import { Link, useRouterState } from '@tanstack/react-router';
 import {
   Boxes,
+  Briefcase,
   Command,
   FileSpreadsheet,
   Fingerprint,
@@ -36,11 +37,27 @@ const CommandPalette = lazyWithRetry(() =>
 );
 
 interface NavEntry {
-  to: '/' | '/finance' | '/inventory' | '/attendance' | '/payroll' | '/rbac' | '/audit' | '/profile';
+  to:
+    | '/'
+    | '/finance'
+    | '/inventory'
+    | '/attendance'
+    | '/payroll'
+    | '/portfolio'
+    | '/rbac'
+    | '/audit'
+    | '/profile';
   label: string;
   group: 'Operasional' | 'Kontrol';
   icon: typeof LayoutDashboard;
-  module?: 'finance' | 'inventory' | 'attendance' | 'payroll' | 'rbac' | 'audit';
+  module?:
+    | 'finance'
+    | 'inventory'
+    | 'attendance'
+    | 'payroll'
+    | 'portfolio'
+    | 'rbac'
+    | 'audit';
 }
 
 const NAV_ENTRIES: NavEntry[] = [
@@ -60,6 +77,13 @@ const NAV_ENTRIES: NavEntry[] = [
     group: 'Operasional',
     icon: FileSpreadsheet,
     module: 'payroll',
+  },
+  {
+    to: '/portfolio',
+    label: 'Portofolio Web',
+    group: 'Operasional',
+    icon: Briefcase,
+    module: 'portfolio',
   },
   { to: '/rbac', label: 'Akses & Tim', group: 'Kontrol', icon: Users, module: 'rbac' },
   { to: '/audit', label: 'Audit Trail', group: 'Kontrol', icon: ShieldCheck, module: 'audit' },

@@ -6,6 +6,7 @@ export type ModuleSkeletonVariant =
   | 'inventory'
   | 'attendance'
   | 'payroll'
+  | 'portfolio'
   | 'rbac'
   | 'audit'
   | 'profile';

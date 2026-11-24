@@ -2,6 +2,7 @@ import { hasPermission } from '@ekalliptus/contracts';
 import {
   ArrowRight,
   Boxes,
+  Briefcase,
   FileSpreadsheet,
   Fingerprint,
   LayoutDashboard,
@@ -97,6 +98,16 @@ export function CommandPalette({
         hint: 'Kalkulasi periode gaji, approval, posting kas & slip PDF',
         path: '/payroll',
         icon: FileSpreadsheet,
+      });
+    }
+    if (hasPermission(perms, 'portfolio', 'view')) {
+      list.push({
+        id: 'nav-portfolio',
+        group: 'Navigasi',
+        label: 'Portofolio Web',
+        hint: 'Upload & kelola katalog project untuk web ekalliptus.com',
+        path: '/portfolio',
+        icon: Briefcase,
       });
     }
     if (hasPermission(perms, 'rbac', 'view')) {

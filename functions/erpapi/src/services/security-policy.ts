@@ -2,6 +2,40 @@ import { hasPermission } from '@ekalliptus/contracts';
 
 const CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/;
 
+export const ALLOWED_PORTFOLIO_UPLOAD_MIMES = new Set([
+  'image/webp',
+  'image/png',
+  'image/jpeg',
+  'image/avif',
+]);
+
+export function isAllowedPortfolioImageMime(contentType: string): boolean {
+  return ALLOWED_PORTFOLIO_UPLOAD_MIMES.has(contentType.trim().toLowerCase());
+}
+
+export function isSafePortfolioObjectKey(key: string): boolean {
+  return isSafeObjectKey(key) && key.startsWith('portfolio/');
+}
+
+export function slugifyPortfolioTitle(input: string): string {
+  return input
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 96);
+}
+
+export function isSafeHttpsUrl(raw: string): boolean {
+  try {
+    const parsed = new URL(raw.trim());
+    return parsed.protocol === 'https:' && parsed.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function isSafeObjectKey(key: string): boolean {
   if (!key || CONTROL_CHARS_RE.test(key)) return false;
   if (key.includes('\\') || key.startsWith('/') || key.endsWith('/')) return false;
@@ -66,6 +100,12 @@ export async function authorizeStorageDownload(
     return segments.length >= 2 && hasPermission(input.permissions, 'inventory', 'view')
       ? { allowed: true }
       : { allowed: false, reason: 'missing_inventory_view' };
+  }
+
+  if (top === 'portfolio') {
+    return segments.length >= 3 && hasPermission(input.permissions, 'portfolio', 'view')
+      ? { allowed: true }
+      : { allowed: false, reason: 'missing_portfolio_view' };
   }
 
   return { allowed: false, reason: 'forbidden_prefix' };

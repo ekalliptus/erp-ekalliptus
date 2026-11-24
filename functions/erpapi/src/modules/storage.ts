@@ -1,11 +1,15 @@
 import crypto from 'node:crypto';
-import { presignDownloadSchema, presignUploadSchema } from '@ekalliptus/contracts';
+import { hasPermission, presignDownloadSchema, presignUploadSchema } from '@ekalliptus/contracts';
 import { payroll_items } from '@ekalliptus/db';
 import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { writeAuditLog } from '../middleware/audit.js';
 import { getDb } from '../db.js';
-import { authorizeStorageDownload, isSafeObjectKey } from '../services/security-policy.js';
+import {
+  authorizeStorageDownload,
+  isAllowedPortfolioImageMime,
+  isSafeObjectKey,
+} from '../services/security-policy.js';
 import { createPresignedDownloadUrl, createPresignedUploadUrl } from '../services/storage.js';
 import type { AppEnv } from '../types.js';
 import type { ErpModulePlugin } from './plugin.js';
@@ -28,6 +32,23 @@ router.post('/presign-upload', async (c) => {
       { error: 'Forbidden: hanya Owner yang dapat mengunggah file rilis aplikasi.' },
       403,
     );
+  }
+  if (category === 'portfolio') {
+    const canPortfolioUpload =
+      hasPermission(auth.permissions, 'portfolio', 'create') ||
+      hasPermission(auth.permissions, 'portfolio', 'update');
+    if (!canPortfolioUpload) {
+      return c.json(
+        { error: 'Forbidden: Anda tidak memiliki izin mengunggah media portofolio.' },
+        403,
+      );
+    }
+    if (!isAllowedPortfolioImageMime(content_type)) {
+      return c.json(
+        { error: 'Format gambar portofolio hanya mendukung WEBP, PNG, JPG, atau AVIF.' },
+        400,
+      );
+    }
   }
   const safeName = sanitizeFilename(filename);
   const objectKey =

@@ -5,6 +5,7 @@ export const ERP_MODULES = [
   'payroll',
   'rbac',
   'audit',
+  'portfolio',
 ] as const;
 
 export const ERP_ACTIONS = [

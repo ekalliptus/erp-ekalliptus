@@ -27,6 +27,7 @@ import { financePlugin } from './modules/finance.js';
 import { inventoryPlugin } from './modules/inventory.js';
 import { payrollPlugin } from './modules/payroll.js';
 import { registerErpPlugins } from './modules/plugin.js';
+import { portfolioPlugin, publicPortfolioPlugin } from './modules/portfolio.js';
 import { profilePlugin } from './modules/profile.js';
 import { rbacPlugin } from './modules/rbac.js';
 import { realtimePlugin } from './modules/realtime.js';
@@ -38,7 +39,7 @@ const app = new Hono<AppEnv>();
 
 const ALLOWED_ORIGINS = (
   process.env.WEB_ALLOWED_ORIGINS ??
-  'https://my.ekalliptus.com,https://myekalliptus.pages.dev,http://localhost:5173'
+  'https://my.ekalliptus.com,https://myekalliptus.pages.dev,https://ekalliptus.com,http://localhost:5173'
 )
   .split(',')
   .map((value) => value.trim())
@@ -193,7 +194,9 @@ app.use('/api/*', async (c, next) => {
     c.req.path === '/api/auth/claim' ||
     ((c.req.path === '/api/app/version' ||
       c.req.path === '/api/app/changelog' ||
-      c.req.path === '/api/app/download/android') &&
+      c.req.path === '/api/app/download/android' ||
+      c.req.path === '/api/public/portfolio' ||
+      c.req.path.startsWith('/api/public/portfolio/')) &&
       c.req.method === 'GET')
   ) {
     await next();
@@ -299,6 +302,8 @@ app.get('/api/me', async (c) => {
 const apiRouter = new Hono<AppEnv>();
 registerErpPlugins(apiRouter, [
   appReleasesPlugin,
+  portfolioPlugin,
+  publicPortfolioPlugin,
   profilePlugin,
   financePlugin,
   inventoryPlugin,
