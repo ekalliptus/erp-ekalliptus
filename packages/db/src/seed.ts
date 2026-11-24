@@ -3,6 +3,7 @@ import { config } from 'dotenv';
 import { and, eq, inArray } from 'drizzle-orm';
 import { createDirectDb } from './client.js';
 import {
+  app_releases,
   employees,
   finance_accounts,
   finance_categories,
@@ -169,7 +170,7 @@ export async function runSeed() {
         .where(eq(employees.email, ownerEmail))
         .limit(1);
       if (ownerRow && !ownerRow.auth_user_id && !ownerRow.claim_code_hash) {
-        const claimCode = 'EK-' + randomBytes(9)
+        const claimCode = 'EK-' + randomBytes(16)
           .toString('base64url')
           .replace(/[^A-Za-z0-9]/g, '')
           .slice(0, 10)
@@ -235,6 +236,74 @@ export async function runSeed() {
           work_end_time: '17:00',
         })
         .onConflictDoNothing({ target: office_locations.name });
+
+      const baselineReleases = [
+        {
+          version: '1.0.0',
+          build_number: 1,
+          title: 'Rilis Awal MyEkalliptus ERP',
+          published_at: new Date('2026-11-20T09:00:00+07:00'),
+          changelog: [
+            'Keuangan, Inventaris, Absensi Geofence & Payroll terintegrasi 5 layanan Neon',
+            'RBAC 5 role dengan Audit Trail immutable, Neon Realtime & Notifikasi Push FCM',
+          ],
+        },
+        {
+          version: '1.1.0',
+          build_number: 2,
+          title: 'Absensi 1-Tap, Peta Kantor & Profil per Role',
+          published_at: new Date('2026-11-22T10:00:00+07:00'),
+          changelog: [
+            'Absensi 1-Tap Biometrik & Scan Wajah dengan telemetri GPS, perangkat, dan IP',
+            'Halaman Setup Izin Sensor, Pengaturan Posisi Kantor di Maps (Owner), dan Profil Role',
+          ],
+        },
+        {
+          version: '1.2.0',
+          build_number: 3,
+          title: 'Owner User Manager, Presensi 1-Klik Web & Info Pembaruan',
+          published_at: new Date('2026-11-22T18:45:00+07:00'),
+          changelog: [
+            'Owner User & Employee Manager (CRUD karyawan, kode aktivasi, putus tautan, hapus aman & matriks role)',
+            'Presensi 1-Klik Web dengan verifikasi webcam/QR & pembacaan GPS otomatis',
+            'Info versi aplikasi, riwayat changelog, cek update manual, dan popup pembaruan otomatis',
+          ],
+        },
+        {
+          version: '1.3.0',
+          build_number: 4,
+          title: 'Scan Wajah 4 Tahap, Profil Wajah, Sinkron Avatar & Perbaikan Kasir POS',
+          published_at: new Date('2026-11-23T08:30:00+07:00'),
+          changelog: [
+            'Pendaftaran scan wajah 4 sudut dengan panduan bertahap, deteksi akurat, dan toleransi pencahayaan lebih baik',
+            'Menu Data Wajah di halaman Profil Web & Android untuk melihat status, perbarui, dan hapus wajah terdaftar',
+            'Sinkronisasi langsung foto profil pada avatar header Beranda Web & Android',
+            'Perbaikan posisi bottom sheet Tambah Item Manual Kasir POS agar bebas dari dock navigasi floating',
+            'Penghapusan tombol download duplikat di header halaman login web',
+          ],
+        },
+      ];
+
+      for (const platform of ['android', 'web'] as const) {
+        for (const rel of baselineReleases) {
+          await tx
+            .insert(app_releases)
+            .values({
+              platform,
+              version: rel.version,
+              build_number: rel.build_number,
+              title: rel.title,
+              changelog: rel.changelog,
+              download_url: 'https://my.ekalliptus.com',
+              is_mandatory: false,
+              is_published: true,
+              published_at: rel.published_at,
+            })
+            .onConflictDoNothing({
+              target: [app_releases.platform, app_releases.build_number],
+            });
+        }
+      }
 
       const existingOwnerPerms = await tx
         .select()

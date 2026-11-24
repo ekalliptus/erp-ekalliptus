@@ -18,15 +18,18 @@ export default defineConfig({
     strictPort: true,
   },
   build: {
+    target: 'es2022',
     rollupOptions: {
       output: {
         // Vendor dipecah dari chunk aplikasi supaya cache browser tidak hangus
         // setiap kali kode aplikasi berubah (react, tanstack, neon berubah jarang).
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined;
+          if (id.includes('@vladmandic/face-api') || id.includes('@tensorflow')) return 'vendor-faceapi';
           if (id.includes('@tanstack')) return 'vendor-tanstack';
           if (id.includes('firebase')) return 'vendor-firebase';
-          if (id.includes('@neon')) return 'vendor-neon';
+          if (id.includes('@neon/realtime')) return 'vendor-neon-realtime';
+          if (id.includes('@neon')) return 'vendor-neon-auth';
           if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'vendor-react';
           return undefined;
         },

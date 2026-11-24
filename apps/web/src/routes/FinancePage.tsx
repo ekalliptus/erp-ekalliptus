@@ -1,404 +1,796 @@
 import { hasPermission } from '@ekalliptus/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ColumnDef } from '@tanstack/react-table';
 import {
-  Check,
-  FileText,
-  Paperclip,
+  AlertTriangle,
+  Banknote,
+  Barcode,
+  Camera,
+  CheckCircle2,
+  Download,
+  Minus,
   Plus,
+  Printer,
+  QrCode,
   Receipt,
+  Search,
+  ShoppingCart,
+  Smartphone,
+  Store,
+  Trash2,
+  TrendingUp,
   Undo2,
   Wallet,
+  X,
 } from 'lucide-react';
-import { useMemo, useState, type FormEvent } from 'react';
-import { DataTable } from '../components/DataTable.tsx';
-import { AccountCardsSkeleton, TableSkeleton } from '../components/Skeleton.tsx';
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import { SlideOver } from '../components/SlideOver.tsx';
 import { EmptyState, ErrorState } from '../components/StateViews.tsx';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import {
   erpApi,
-  uploadFileViaPresign,
   type FinanceAccount,
-  type FinanceObligation,
-  type FinanceTransaction,
   type MeResponse,
+  type PosCatalogProduct,
+  type PosDiscountType,
+  type PosPaymentMethod,
+  type PosSaleRow,
 } from '../lib/api.ts';
-import { formatDateId, formatDateTimeId, formatRupiah } from '../lib/format.ts';
+import { formatDateTimeId, formatRupiah } from '../lib/format.ts';
 
-type FinanceTab = 'transactions' | 'accounts' | 'obligations';
+type PosTab = 'pos' | 'reports';
+
+interface CartItem {
+  key: string;
+  inventory_item_id: string | null;
+  sku: string | null;
+  item_name: string;
+  unit: string;
+  unit_price: number;
+  qty: number;
+  max_stock: number | null;
+}
+
+const PAYMENT_OPTIONS: Array<{
+  id: PosPaymentMethod;
+  label: string;
+  preferredTypes: FinanceAccount['type'][];
+  icon: typeof Banknote;
+}> = [
+  { id: 'cash', label: 'Tunai', preferredTypes: ['cash'], icon: Banknote },
+  { id: 'qris', label: 'QRIS', preferredTypes: ['qris', 'ewallet', 'bank'], icon: QrCode },
+  { id: 'transfer', label: 'Transfer', preferredTypes: ['bank'], icon: Wallet },
+  { id: 'ewallet', label: 'E-Wallet', preferredTypes: ['ewallet', 'qris'], icon: Smartphone },
+];
+
+function paymentMethodLabel(method: PosPaymentMethod): string {
+  switch (method) {
+    case 'cash':
+      return 'Tunai';
+    case 'qris':
+      return 'QRIS';
+    case 'transfer':
+      return 'Transfer Bank';
+    case 'ewallet':
+      return 'E-Wallet';
+  }
+}
+
+function defaultAccountForMethod(
+  accounts: FinanceAccount[],
+  method: PosPaymentMethod,
+): string {
+  if (accounts.length === 0) return '';
+  const spec = PAYMENT_OPTIONS.find((o) => o.id === method);
+  if (spec) {
+    for (const accType of spec.preferredTypes) {
+      const hit = accounts.find((a) => a.is_active && a.type === accType);
+      if (hit) return hit.id;
+    }
+  }
+  return accounts.find((a) => a.is_active)?.id ?? accounts[0]!.id;
+}
+
+function PosBarcodeScannerModal({
+  open,
+  onClose,
+  onDetected,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onDetected: (code: string) => void;
+}) {
+  const titleId = useId();
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [manualCode, setManualCode] = useState('');
+  const [nativeSupport, setNativeSupport] = useState(true);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    let timerId: number | null = null;
+    setErrorMsg(null);
+    setManualCode('');
+
+    const stopStream = () => {
+      if (streamRef.current) {
+        for (const t of streamRef.current.getTracks()) t.stop();
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+    };
+
+    const BarcodeDetectorCtor = (
+      window as unknown as {
+        BarcodeDetector?: new (opts?: { formats?: string[] }) => {
+          detect: (src: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
+        };
+      }
+    ).BarcodeDetector;
+
+    async function start() {
+      if (!BarcodeDetectorCtor) {
+        setNativeSupport(false);
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setErrorMsg('Kamera browser tidak tersedia. Masukkan kode barcode secara manual.');
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+          audio: false,
+        });
+        if (cancelled) {
+          for (const t of stream.getTracks()) t.stop();
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => null);
+        }
+        const detector = new BarcodeDetectorCtor({
+          formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'upc_a', 'upc_e'],
+        });
+
+        const loop = async () => {
+          if (cancelled || !videoRef.current) return;
+          try {
+            if (videoRef.current.readyState >= 2) {
+              const hits = await detector.detect(videoRef.current);
+              const val = hits[0]?.rawValue?.trim();
+              if (val) {
+                onDetected(val);
+                onClose();
+                return;
+              }
+            }
+          } catch {
+            // Abaikan frame yang gagal didekode
+          }
+          timerId = window.setTimeout(() => void loop(), 260);
+        };
+        timerId = window.setTimeout(() => void loop(), 300);
+      } catch (err) {
+        if (!cancelled) {
+          setErrorMsg(
+            err instanceof Error
+              ? `Kamera tidak dapat dibuka (${err.message}).`
+              : 'Kamera gagal diakses.',
+          );
+        }
+      }
+    }
+
+    void start();
+    return () => {
+      cancelled = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+      stopStream();
+    };
+  }, [open, onClose, onDetected]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black/60" aria-hidden="true" onClick={onClose} />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative z-10 w-full max-w-md space-y-4 rounded-xl border border-border bg-surface p-5 text-text-primary shadow-xl"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border pb-3">
+          <div>
+            <h3 id={titleId} className="font-display text-base font-bold text-text-primary">
+              Scan Barcode / SKU Produk
+            </h3>
+            <p className="mt-0.5 text-xs text-text-secondary">
+              Arahkan kamera ke barcode atau masukkan kode SKU secara manual.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Tutup scanner barcode"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface-subtle text-text-primary"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        {errorMsg ? (
+          <div className="rounded-lg border border-[#FECACA] bg-danger-soft px-3 py-2 text-xs text-[#991B1B] dark:border-[#7F1D1D] dark:text-[#FCA5A5]">
+            {errorMsg}
+          </div>
+        ) : nativeSupport ? (
+          <div className="relative aspect-[4/3] overflow-hidden rounded-lg border border-border bg-black">
+            <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
+          </div>
+        ) : (
+          <div className="rounded-lg border border-border bg-surface-subtle p-3 text-xs text-text-secondary">
+            Browser desktop ini belum mendukung API BarcodeDetector kamera. Gunakan scanner USB/Bluetooth langsung di kolom pencarian atau ketik kodenya di bawah.
+          </div>
+        )}
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!manualCode.trim()) return;
+            onDetected(manualCode.trim());
+            onClose();
+          }}
+          className="flex items-center gap-2"
+        >
+          <input
+            value={manualCode}
+            onChange={(e) => setManualCode(e.target.value)}
+            placeholder="Ketik / scan barcode atau SKU..."
+            className="h-9 flex-1 rounded-md border border-border-strong bg-surface px-3 text-sm"
+            autoFocus
+          />
+          <button
+            type="submit"
+            className="inline-flex h-9 items-center rounded-md bg-accent px-3.5 text-xs font-semibold text-on-accent hover:bg-accent-hover"
+          >
+            Tambah
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function PosReceiptModal({
+  sale,
+  onClose,
+  onDownloadPdf,
+  pdfBusy,
+}: {
+  sale: PosSaleRow | null;
+  onClose: () => void;
+  onDownloadPdf: (saleId: string) => Promise<void>;
+  pdfBusy: boolean;
+}) {
+  const titleId = useId();
+  if (!sale) return null;
+
+  function handlePrint() {
+    document.body.classList.add('ep-printing-receipt');
+    const cleanup = () => {
+      document.body.classList.remove('ep-printing-receipt');
+      window.removeEventListener('afterprint', cleanup);
+    };
+    window.addEventListener('afterprint', cleanup);
+    window.print();
+    window.setTimeout(cleanup, 1500);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black/60" aria-hidden="true" onClick={onClose} />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative z-10 w-full max-w-md space-y-4 rounded-xl border border-border bg-surface p-5 text-text-primary shadow-xl max-h-[92vh] overflow-y-auto"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-border pb-3">
+          <div className="flex items-center gap-2">
+            <Receipt className="h-5 w-5 text-accent" aria-hidden="true" />
+            <div>
+              <h3 id={titleId} className="font-display text-base font-bold text-text-primary">
+                Struk Penjualan Digital
+              </h3>
+              <p className="font-mono text-xs text-text-secondary">{sale.sale_number}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Tutup struk"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface-subtle text-text-primary"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="pos-receipt-print space-y-3 rounded-lg border border-dashed border-border-strong bg-surface-subtle p-4 font-mono text-xs">
+          <div className="text-center">
+            <p className="font-display text-sm font-bold text-text-primary">EKALLIPTUS DIGITAL</p>
+            <p className="text-[11px] text-text-secondary">STRUK KASIR RESMI (POS)</p>
+            {sale.status === 'void' ? (
+              <p className="mt-1 inline-block rounded bg-danger-soft px-2 py-0.5 text-[11px] font-bold text-[#991B1B] dark:text-[#FCA5A5]">
+                TRANSAKSI VOID / DIBATALKAN
+              </p>
+            ) : null}
+          </div>
+
+          <div className="space-y-1 border-t border-dashed border-border pt-2 text-[11px]">
+            <div className="flex justify-between gap-2">
+              <span className="text-text-secondary">No. Struk</span>
+              <span className="font-semibold text-text-primary">{sale.sale_number}</span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-text-secondary">Waktu</span>
+              <span className="text-text-primary">{formatDateTimeId(sale.created_at)}</span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-text-secondary">Kasir</span>
+              <span className="text-text-primary">{sale.cashier_name}</span>
+            </div>
+            {sale.customer_name ? (
+              <div className="flex justify-between gap-2">
+                <span className="text-text-secondary">Pelanggan</span>
+                <span className="text-text-primary">{sale.customer_name}</span>
+              </div>
+            ) : null}
+            <div className="flex justify-between gap-2">
+              <span className="text-text-secondary">Metode</span>
+              <span className="text-text-primary">
+                {paymentMethodLabel(sale.payment_method)} ({sale.account_name})
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-2 border-t border-dashed border-border pt-2">
+            {sale.items.map((item) => (
+              <div key={item.id} className="space-y-0.5">
+                <p className="font-semibold text-text-primary">{item.item_name}</p>
+                <div className="flex justify-between text-[11px] text-text-secondary">
+                  <span>
+                    {item.qty} {item.unit} x {formatRupiah(item.unit_price)}
+                  </span>
+                  <span className="font-semibold text-text-primary">
+                    {formatRupiah(item.line_total)}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-1 border-t border-dashed border-border pt-2 text-[11px]">
+            <div className="flex justify-between">
+              <span className="text-text-secondary">Subtotal</span>
+              <span>{formatRupiah(sale.subtotal)}</span>
+            </div>
+            {BigInt(sale.discount_amount) > 0n ? (
+              <div className="flex justify-between text-accent">
+                <span>
+                  Diskon
+                  {sale.discount_type === 'percent' ? ` (${sale.discount_value}%)` : ''}
+                </span>
+                <span>-{formatRupiah(sale.discount_amount)}</span>
+              </div>
+            ) : null}
+            {BigInt(sale.tax_amount) > 0n ? (
+              <div className="flex justify-between">
+                <span className="text-text-secondary">PPN ({sale.tax_percent}%)</span>
+                <span>{formatRupiah(sale.tax_amount)}</span>
+              </div>
+            ) : null}
+            <div className="flex justify-between border-t border-border pt-1.5 text-sm font-bold text-text-primary">
+              <span>TOTAL</span>
+              <span>{formatRupiah(sale.total_amount)}</span>
+            </div>
+            <div className="flex justify-between pt-1">
+              <span className="text-text-secondary">Dibayar</span>
+              <span>{formatRupiah(sale.paid_amount)}</span>
+            </div>
+            <div className="flex justify-between font-semibold">
+              <span className="text-text-secondary">Kembalian</span>
+              <span>{formatRupiah(sale.change_amount)}</span>
+            </div>
+          </div>
+
+          {sale.note ? (
+            <p className="border-t border-dashed border-border pt-2 text-[11px] text-text-secondary">
+              Catatan: {sale.note}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handlePrint}
+            className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border-strong bg-surface-subtle px-3 text-xs font-semibold text-text-primary hover:border-accent"
+          >
+            <Printer className="h-4 w-4" aria-hidden="true" />
+            Cetak Struk
+          </button>
+          <button
+            type="button"
+            disabled={pdfBusy}
+            onClick={() => void onDownloadPdf(sale.id)}
+            className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border-strong bg-surface-subtle px-3 text-xs font-semibold text-text-primary hover:border-accent disabled:opacity-50"
+          >
+            <Download className="h-4 w-4" aria-hidden="true" />
+            {pdfBusy ? 'Membuat PDF...' : 'Unduh PDF'}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-10 w-full items-center justify-center rounded-lg bg-accent px-4 text-xs font-semibold text-on-accent hover:bg-accent-hover"
+          >
+            Selesai
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function FinancePage({ me }: { me: MeResponse }) {
   const queryClient = useQueryClient();
   const canView = hasPermission(me.permissions, 'finance', 'view');
   const canCreate = hasPermission(me.permissions, 'finance', 'create');
   const canApprove = hasPermission(me.permissions, 'finance', 'approve');
-  const canExport = hasPermission(me.permissions, 'finance', 'export');
 
-  const [tab, setTab] = useState<FinanceTab>('transactions');
-  const [typeFilter, setTypeFilter] = useState('all');
+  const [tab, setTab] = useState<PosTab>('pos');
   const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(
     null,
   );
 
-  // SlideOver states
-  const [txDrawerOpen, setTxDrawerOpen] = useState(false);
-  const [accDrawerOpen, setAccDrawerOpen] = useState(false);
-  const [catDrawerOpen, setCatDrawerOpen] = useState(false);
-  const [obDrawerOpen, setObDrawerOpen] = useState(false);
-  const [payObTarget, setPayObTarget] = useState<FinanceObligation | null>(null);
+  // Catalog & POS checkout state
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [manualDrawerOpen, setManualDrawerOpen] = useState(false);
+  const [manualName, setManualName] = useState('');
+  const [manualPrice, setManualPrice] = useState('');
+  const [manualUnit, setManualUnit] = useState('pcs');
+  const [manualQty, setManualQty] = useState('1');
 
-  // Create transaction state
-  const [txType, setTxType] = useState<'income' | 'expense' | 'transfer'>('expense');
-  const [txAccountId, setTxAccountId] = useState('');
-  const [txTargetAccountId, setTxTargetAccountId] = useState('');
-  const [txCategoryId, setTxCategoryId] = useState('');
-  const [txAmount, setTxAmount] = useState('');
-  const [txDesc, setTxDesc] = useState('');
-  const [txStatus, setTxStatus] = useState<'posted' | 'pending'>('posted');
-  const [txReceiptKey, setTxReceiptKey] = useState<string | null>(null);
-  const [uploadingReceipt, setUploadingReceipt] = useState(false);
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [customerName, setCustomerName] = useState('');
+  const [saleNote, setSaleNote] = useState('');
+  const [discountType, setDiscountType] = useState<PosDiscountType>('none');
+  const [discountInput, setDiscountInput] = useState('');
+  const [taxPercent, setTaxPercent] = useState(0);
+  const [paymentMethod, setPaymentMethod] = useState<PosPaymentMethod>('cash');
+  const [accountId, setAccountId] = useState('');
+  const [cashPaidInput, setCashPaidInput] = useState('');
 
-  // Create account state
-  const [accName, setAccName] = useState('');
-  const [accType, setAccType] = useState<FinanceAccount['type']>('cash');
-  const [accNumber, setAccNumber] = useState('');
-  const [accInitial, setAccInitial] = useState('0');
+  // Receipt & Void modals
+  const [activeReceipt, setActiveReceipt] = useState<PosSaleRow | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [methodFilter, setMethodFilter] = useState('');
+  const [historySearch, setHistorySearch] = useState('');
+  const [voidTarget, setVoidTarget] = useState<PosSaleRow | null>(null);
+  const [voidReason, setVoidReason] = useState('');
 
-  // Create category state
-  const [catName, setCatName] = useState('');
-  const [catKind, setCatKind] = useState<'income' | 'expense'>('expense');
-
-  // Create obligation state
-  const [obKind, setObKind] = useState<'receivable' | 'payable'>('receivable');
-  const [obCounterparty, setObCounterparty] = useState('');
-  const [obAmount, setObAmount] = useState('');
-  const [obDueDate, setObDueDate] = useState('');
-  const [obNote, setObNote] = useState('');
-
-  // Pay obligation state
-  const [payAccId, setPayAccId] = useState('');
-  const [payAmount, setPayAmount] = useState('');
-  const [payNote, setPayNote] = useState('');
-
-  const accountsQuery = useQuery({
-    queryKey: ['finance', 'accounts'],
-    queryFn: erpApi.finance.accounts,
+  const catalogQuery = useQuery({
+    queryKey: ['finance', 'pos', 'catalog'],
+    queryFn: erpApi.finance.posCatalog,
     enabled: canView,
   });
 
-  const categoriesQuery = useQuery({
-    queryKey: ['finance', 'categories'],
-    queryFn: erpApi.finance.categories,
+  const salesQuery = useQuery({
+    queryKey: ['finance', 'pos', 'sales', statusFilter, methodFilter],
+    queryFn: () =>
+      erpApi.finance.posSales({
+        status: statusFilter || undefined,
+        payment_method: methodFilter || undefined,
+      }),
     enabled: canView,
   });
 
-  const transactionsQuery = useQuery({
-    queryKey: ['finance', 'transactions'],
-    queryFn: erpApi.finance.transactions,
-    enabled: canView,
-  });
+  const warehouses = catalogQuery.data?.warehouses ?? [];
+  const activeWarehouseId =
+    selectedWarehouseId ||
+    catalogQuery.data?.default_warehouse_id ||
+    warehouses[0]?.id ||
+    '';
+  const accounts = catalogQuery.data?.accounts ?? [];
+  const products = catalogQuery.data?.products ?? [];
 
-  const obligationsQuery = useQuery({
-    queryKey: ['finance', 'obligations'],
-    queryFn: erpApi.finance.obligations,
-    enabled: canView,
-  });
+  useEffect(() => {
+    if (accounts.length > 0 && !accountId) {
+      setAccountId(defaultAccountForMethod(accounts, paymentMethod));
+    }
+  }, [accounts, accountId, paymentMethod]);
 
-  const summaryQuery = useQuery({
-    queryKey: ['finance', 'summary'],
-    queryFn: erpApi.finance.summary,
-    enabled: canView,
-  });
-
-  const invalidateAllFinance = async () => {
-    await queryClient.invalidateQueries({ queryKey: ['finance'] });
-    await queryClient.invalidateQueries({ queryKey: ['me'] });
+  const invalidatePos = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['finance'] }),
+      queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+      queryClient.invalidateQueries({ queryKey: ['me'] }),
+    ]);
   };
 
-  const createTxMutation = useMutation({
-    mutationFn: erpApi.finance.createTransaction,
+  const createSaleMut = useMutation({
+    mutationFn: erpApi.finance.createPosSale,
     onSuccess: async (res) => {
-      await invalidateAllFinance();
-      setTxDrawerOpen(false);
-      setTxAmount('');
-      setTxDesc('');
-      setTxReceiptKey(null);
+      await invalidatePos();
+      setCart([]);
+      setCustomerName('');
+      setSaleNote('');
+      setDiscountType('none');
+      setDiscountInput('');
+      setTaxPercent(0);
+      setCashPaidInput('');
+      setActiveReceipt(res.sale);
+      const alertInfo =
+        res.low_stock_alerts.length > 0
+          ? ` Peringatan stok menipis: ${res.low_stock_alerts.map((a) => `${a.name} (${a.qty})`).join(', ')}.`
+          : '';
       setFeedback({
         kind: 'success',
-        text: `Transaksi berhasil disimpan (TXID ${res.txid || 'posted'}).`,
+        text: `Transaksi ${res.sale.sale_number} berhasil dicatat.${alertInfo}`,
       });
     },
     onError: (err) => setFeedback({ kind: 'error', text: (err as Error).message }),
   });
 
-  const approveTxMutation = useMutation({
-    mutationFn: erpApi.finance.approveTransaction,
-    onSuccess: async () => {
-      await invalidateAllFinance();
-      setFeedback({ kind: 'success', text: 'Transaksi pending berhasil disetujui & diposting.' });
+  const voidSaleMut = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      erpApi.finance.voidPosSale(id, reason),
+    onSuccess: async (res) => {
+      await invalidatePos();
+      setVoidTarget(null);
+      setVoidReason('');
+      setFeedback({
+        kind: 'success',
+        text: `Transaksi ${res.sale.sale_number} berhasil dibatalkan (void) dan stok/kas telah dikembalikan.`,
+      });
     },
     onError: (err) => setFeedback({ kind: 'error', text: (err as Error).message }),
   });
 
-  const voidTxMutation = useMutation({
-    mutationFn: erpApi.finance.voidTransaction,
-    onSuccess: async () => {
-      await invalidateAllFinance();
-      setFeedback({ kind: 'success', text: 'Transaksi dibatalkan (void) dan saldo dikembalikan.' });
-    },
-    onError: (err) => setFeedback({ kind: 'error', text: (err as Error).message }),
-  });
+  function productStock(product: PosCatalogProduct): number {
+    if (!activeWarehouseId) return product.total_stock;
+    return product.stocks_by_warehouse[activeWarehouseId] ?? 0;
+  }
 
-  const createAccMutation = useMutation({
-    mutationFn: erpApi.finance.createAccount,
-    onSuccess: async () => {
-      await invalidateAllFinance();
-      setAccDrawerOpen(false);
-      setAccName('');
-      setAccNumber('');
-      setAccInitial('0');
-      setFeedback({ kind: 'success', text: 'Rekening kas baru berhasil ditambahkan.' });
-    },
-    onError: (err) => setFeedback({ kind: 'error', text: (err as Error).message }),
-  });
+  function addCatalogProduct(product: PosCatalogProduct) {
+    const avail = productStock(product);
+    if (avail <= 0) {
+      setFeedback({ kind: 'error', text: `Stok ${product.name} di gudang terpilih habis.` });
+      return;
+    }
+    const unitPrice = Number(product.sell_price);
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+      setFeedback({
+        kind: 'error',
+        text: `Harga jual ${product.name} belum diatur (> Rp 0) di Inventaris.`,
+      });
+      return;
+    }
 
-  const createCatMutation = useMutation({
-    mutationFn: erpApi.finance.createCategory,
-    onSuccess: async () => {
-      await invalidateAllFinance();
-      setCatDrawerOpen(false);
-      setCatName('');
-      setFeedback({ kind: 'success', text: 'Kategori transaksi berhasil ditambahkan.' });
-    },
-    onError: (err) => setFeedback({ kind: 'error', text: (err as Error).message }),
-  });
+    setCart((prev) => {
+      const idx = prev.findIndex((c) => c.inventory_item_id === product.id);
+      if (idx >= 0) {
+        const current = prev[idx]!;
+        if (current.qty + 1 > avail) {
+          setFeedback({
+            kind: 'error',
+            text: `Stok ${product.name} di gudang tersisa ${avail} ${product.unit}.`,
+          });
+          return prev;
+        }
+        return prev.map((c, i) => (i === idx ? { ...c, qty: c.qty + 1, max_stock: avail } : c));
+      }
+      return [
+        ...prev,
+        {
+          key: `inv-${product.id}`,
+          inventory_item_id: product.id,
+          sku: product.sku,
+          item_name: product.name,
+          unit: product.unit,
+          unit_price: unitPrice,
+          qty: 1,
+          max_stock: avail,
+        },
+      ];
+    });
+  }
 
-  const createObMutation = useMutation({
-    mutationFn: erpApi.finance.createObligation,
-    onSuccess: async () => {
-      await invalidateAllFinance();
-      setObDrawerOpen(false);
-      setObCounterparty('');
-      setObAmount('');
-      setObDueDate('');
-      setObNote('');
-      setFeedback({ kind: 'success', text: 'Catatan hutang/piutang berhasil ditambahkan.' });
-    },
-    onError: (err) => setFeedback({ kind: 'error', text: (err as Error).message }),
-  });
+  function handleBarcodeOrSearchSubmit(rawCode: string) {
+    const q = rawCode.trim().toLowerCase();
+    if (!q) return;
+    const exactMatch = products.find(
+      (p) => (p.barcode && p.barcode.toLowerCase() === q) || p.sku.toLowerCase() === q,
+    );
+    if (exactMatch) {
+      addCatalogProduct(exactMatch);
+      setSearchQuery('');
+      return;
+    }
+    const partialMatches = products.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        (p.barcode && p.barcode.toLowerCase().includes(q)),
+    );
+    if (partialMatches.length === 1) {
+      addCatalogProduct(partialMatches[0]!);
+      setSearchQuery('');
+    } else if (partialMatches.length === 0) {
+      setFeedback({ kind: 'error', text: `Produk dengan kode/nama "${rawCode}" tidak ditemukan.` });
+    }
+  }
 
-  const payObMutation = useMutation({
-    mutationFn: (vars: { id: string; account_id: string; amount: number; note?: string | null }) =>
-      erpApi.finance.payObligation(vars.id, {
-        account_id: vars.account_id,
-        amount: vars.amount,
-        note: vars.note,
+  function handleAddManualItem(e: FormEvent) {
+    e.preventDefault();
+    const price = Math.round(Number(manualPrice));
+    const qty = Math.max(1, Math.round(Number(manualQty) || 1));
+    if (!manualName.trim() || !Number.isFinite(price) || price <= 0) {
+      setFeedback({ kind: 'error', text: 'Nama item dan harga jual (> 0) wajib diisi.' });
+      return;
+    }
+    setCart((prev) => [
+      ...prev,
+      {
+        key: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        inventory_item_id: null,
+        sku: null,
+        item_name: manualName.trim(),
+        unit: manualUnit.trim() || 'pcs',
+        unit_price: price,
+        qty,
+        max_stock: null,
+      },
+    ]);
+    setManualName('');
+    setManualPrice('');
+    setManualUnit('pcs');
+    setManualQty('1');
+    setManualDrawerOpen(false);
+  }
+
+  function updateCartQty(key: string, nextQty: number) {
+    setCart((prev) =>
+      prev.flatMap((c) => {
+        if (c.key !== key) return [c];
+        if (nextQty <= 0) return [];
+        if (c.max_stock !== null && nextQty > c.max_stock) {
+          setFeedback({
+            kind: 'error',
+            text: `Qty ${c.item_name} melebihi stok gudang (${c.max_stock} ${c.unit}).`,
+          });
+          return [c];
+        }
+        return [{ ...c, qty: nextQty }];
       }),
-    onSuccess: async () => {
-      await invalidateAllFinance();
-      setPayObTarget(null);
-      setPayAmount('');
-      setPayNote('');
-      setFeedback({ kind: 'success', text: 'Pembayaran kewajiban berhasil diposting ke kas.' });
-    },
-    onError: (err) => setFeedback({ kind: 'error', text: (err as Error).message }),
-  });
+    );
+  }
 
-  const accounts = accountsQuery.data?.accounts ?? [];
-  const categories = categoriesQuery.data?.categories ?? [];
-  const obligations = obligationsQuery.data?.obligations ?? [];
+  const filteredProducts = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        (p.barcode && p.barcode.toLowerCase().includes(q)),
+    );
+  }, [products, searchQuery]);
 
-  const filteredTransactions = useMemo(() => {
-    const rows = transactionsQuery.data?.transactions ?? [];
-    if (typeFilter === 'all') return rows;
-    return rows.filter((r) => r.type === typeFilter);
-  }, [transactionsQuery.data, typeFilter]);
+  const totals = useMemo(() => {
+    const subtotal = cart.reduce((acc, c) => acc + c.unit_price * c.qty, 0);
+    const rawDisc = Math.max(0, Math.round(Number(discountInput) || 0));
+    let discountAmount = 0;
+    if (discountType === 'percent') {
+      const pct = Math.min(100, rawDisc);
+      discountAmount = Math.floor((subtotal * pct) / 100);
+    } else if (discountType === 'amount') {
+      discountAmount = Math.min(subtotal, rawDisc);
+    }
+    const taxable = Math.max(0, subtotal - discountAmount);
+    const taxAmount = Math.floor((taxable * Math.max(0, taxPercent)) / 100);
+    const totalAmount = taxable + taxAmount;
+    const cashPaid = Math.max(0, Math.round(Number(cashPaidInput) || 0));
+    const paidAmount = paymentMethod === 'cash' ? (cashPaidInput ? cashPaid : totalAmount) : totalAmount;
+    const changeAmount = Math.max(0, paidAmount - totalAmount);
+    return {
+      subtotal,
+      rawDisc: discountType === 'percent' ? Math.min(100, rawDisc) : discountAmount,
+      discountAmount,
+      taxAmount,
+      totalAmount,
+      paidAmount,
+      changeAmount,
+      cashInsufficient: paymentMethod === 'cash' && cashPaidInput.trim() !== '' && cashPaid < totalAmount,
+    };
+  }, [cart, discountType, discountInput, taxPercent, paymentMethod, cashPaidInput]);
 
-  async function handleReceiptUpload(file: File | undefined) {
-    if (!file) return;
-    setUploadingReceipt(true);
+  async function handleCheckout() {
+    if (!canCreate || cart.length === 0 || createSaleMut.isPending) return;
+    if (!accountId) {
+      setFeedback({ kind: 'error', text: 'Pilih akun kas/rekening penerima terlebih dahulu.' });
+      return;
+    }
+    if (totals.totalAmount <= 0) {
+      setFeedback({ kind: 'error', text: 'Total transaksi harus lebih dari Rp 0.' });
+      return;
+    }
+    if (totals.cashInsufficient) {
+      setFeedback({ kind: 'error', text: 'Uang tunai diterima kurang dari total tagihan.' });
+      return;
+    }
     setFeedback(null);
+    await createSaleMut.mutateAsync({
+      warehouse_id: activeWarehouseId || null,
+      account_id: accountId,
+      customer_name: customerName.trim() || null,
+      payment_method: paymentMethod,
+      discount_type: discountType,
+      discount_value: discountType === 'none' ? 0 : totals.rawDisc,
+      tax_percent: taxPercent,
+      paid_amount: totals.paidAmount,
+      note: saleNote.trim() || null,
+      items: cart.map((c) => ({
+        inventory_item_id: c.inventory_item_id,
+        sku: c.sku,
+        item_name: c.item_name,
+        unit: c.unit,
+        qty: c.qty,
+        unit_price: c.unit_price,
+      })),
+    });
+  }
+
+  async function handleDownloadReceiptPdf(saleId: string) {
+    setPdfLoading(true);
     try {
-      const key = await uploadFileViaPresign('receipt', file);
-      setTxReceiptKey(key);
+      const res = await erpApi.finance.posReceiptPdf(saleId);
+      window.open(res.download_url, '_blank', 'noopener,noreferrer');
     } catch (err) {
       setFeedback({ kind: 'error', text: (err as Error).message });
     } finally {
-      setUploadingReceipt(false);
+      setPdfLoading(false);
     }
   }
 
-  async function openReceipt(objectKey: string) {
-    try {
-      const res = await erpApi.storage.presignDownload(objectKey);
-      window.open(res.download_url, '_blank', 'noopener,noreferrer');
-    } catch (err) {
-      setFeedback({ kind: 'error', text: (err as Error).message });
-    }
-  }
-
-  async function openInvoicePdf(id: string) {
-    try {
-      const res = await erpApi.finance.invoicePdf(id);
-      window.open(res.download_url, '_blank', 'noopener,noreferrer');
-    } catch (err) {
-      setFeedback({ kind: 'error', text: (err as Error).message });
-    }
-  }
-
-  const txColumns = useMemo<Array<ColumnDef<FinanceTransaction, any>>>(
-    () => [
-      {
-        accessorKey: 'transacted_at',
-        header: 'Waktu',
-        cell: ({ row }) => (
-          <span className="text-xs text-text-secondary">
-            {formatDateTimeId(row.original.transacted_at)}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'type',
-        header: 'Jenis',
-        cell: ({ row }) => {
-          const t = row.original.type;
-          return (
-            <StatusBadge
-              tone={t === 'income' ? 'success' : t === 'expense' ? 'danger' : 'info'}
-              label={t === 'income' ? 'Masuk' : t === 'expense' ? 'Keluar' : 'Transfer'}
-            />
-          );
-        },
-      },
-      {
-        accessorKey: 'description',
-        header: 'Deskripsi',
-        cell: ({ row }) => (
-          <div className="max-w-xs truncate">
-            <p className="truncate font-medium text-text-primary">{row.original.description}</p>
-            <p className="truncate text-xs text-text-secondary">
-              {row.original.account_name}
-              {row.original.category_name ? ` / ${row.original.category_name}` : ''}
-            </p>
-          </div>
-        ),
-      },
-      {
-        accessorKey: 'amount',
-        header: 'Nominal',
-        cell: ({ row }) => (
-          <span className="font-semibold text-text-primary tabular-nums">
-            {formatRupiah(row.original.amount)}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'status',
-        header: 'Status',
-        cell: ({ row }) => {
-          const st = row.original.status;
-          return (
-            <StatusBadge
-              tone={st === 'posted' ? 'accent' : st === 'pending' ? 'warning' : 'neutral'}
-              label={st === 'posted' ? 'Posted' : st === 'pending' ? 'Pending' : 'Void'}
-            />
-          );
-        },
-      },
-      {
-        id: 'actions',
-        header: 'Aksi',
-        enableSorting: false,
-        cell: ({ row }) => {
-          const r = row.original;
-          return (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {canApprove && r.status === 'pending' ? (
-                <button
-                  type="button"
-                  onClick={() => approveTxMutation.mutate(r.id)}
-                  disabled={approveTxMutation.isPending}
-                  className="inline-flex items-center gap-1 rounded border border-border-strong bg-accent-soft px-2 py-1 text-xs font-semibold text-[#115E59] dark:text-[#34D399]"
-                >
-                  <Check className="h-3 w-3" aria-hidden="true" />
-                  Setujui
-                </button>
-              ) : null}
-              {canApprove && r.status !== 'void' ? (
-                <button
-                  type="button"
-                  onClick={() => voidTxMutation.mutate(r.id)}
-                  disabled={voidTxMutation.isPending}
-                  className="inline-flex items-center gap-1 rounded border border-border-strong bg-surface px-2 py-1 text-xs font-medium text-text-primary hover:bg-surface-subtle"
-                >
-                  <Undo2 className="h-3 w-3" aria-hidden="true" />
-                  Void
-                </button>
-              ) : null}
-              {r.receipt_object_key ? (
-                <button
-                  type="button"
-                  onClick={() => void openReceipt(r.receipt_object_key!)}
-                  className="inline-flex items-center gap-1 rounded border border-border-strong bg-surface px-2 py-1 text-xs font-medium text-text-primary hover:bg-surface-subtle"
-                >
-                  <Paperclip className="h-3 w-3" aria-hidden="true" />
-                  Struk
-                </button>
-              ) : null}
-              {canExport ? (
-                <button
-                  type="button"
-                  onClick={() => void openInvoicePdf(r.id)}
-                  className="inline-flex items-center gap-1 rounded border border-border-strong bg-surface px-2 py-1 text-xs font-medium text-text-primary hover:bg-surface-subtle"
-                >
-                  <FileText className="h-3 w-3" aria-hidden="true" />
-                  PDF
-                </button>
-              ) : null}
-            </div>
-          );
-        },
-      },
-    ],
-    [canApprove, canExport, approveTxMutation, voidTxMutation],
-  );
+  const report = salesQuery.data?.report;
+  const salesList = useMemo(() => {
+    const rows = salesQuery.data?.sales ?? [];
+    const q = historySearch.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (s) =>
+        s.sale_number.toLowerCase().includes(q) ||
+        (s.customer_name && s.customer_name.toLowerCase().includes(q)) ||
+        s.cashier_name.toLowerCase().includes(q),
+    );
+  }, [salesQuery.data?.sales, historySearch]);
 
   if (!canView) {
     return (
       <EmptyState
-        title="Akses Modul Keuangan Ditolak"
-        description="Role Anda tidak memiliki izin finance:view. Hubungi administrator untuk membuka akses."
+        title="Akses Kasir / POS Ditolak"
+        description="Role akun Anda tidak memiliki izin finance:view."
       />
     );
-  }
-
-  function handleOpenTxDrawer() {
-    setTxAccountId(accounts[0]?.id ?? '');
-    setTxTargetAccountId(accounts[1]?.id ?? '');
-    setTxDrawerOpen(true);
-  }
-
-  function submitTransaction(e: FormEvent) {
-    e.preventDefault();
-    const amountNum = Number(txAmount);
-    if (!txAccountId || !Number.isInteger(amountNum) || amountNum <= 0 || !txDesc.trim()) {
-      setFeedback({
-        kind: 'error',
-        text: 'Rekening, nominal bulat positif (IDR), dan deskripsi wajib diisi.',
-      });
-      return;
-    }
-    createTxMutation.mutate({
-      account_id: txAccountId,
-      target_account_id: txType === 'transfer' ? txTargetAccountId || null : null,
-      category_id: txType === 'transfer' ? null : txCategoryId || null,
-      type: txType,
-      amount: amountNum,
-      description: txDesc.trim(),
-      receipt_object_key: txReceiptKey,
-      status: txStatus,
-    });
   }
 
   return (
@@ -406,778 +798,914 @@ export function FinancePage({ me }: { me: MeResponse }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-lg font-bold text-text-primary">
-            Keuangan & Arus Kas
+            Kasir / Point of Sale (POS)
           </h2>
           <p className="text-xs text-text-secondary">
-            Mutasi ACID multi-rekening, hutang/piutang, bukti struk Object Storage, dan kwitansi PDF
+            Penjualan terhubung ke stok Inventaris dan masuk otomatis ke akun kas.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {canCreate ? (
-            <button
-              type="button"
-              onClick={handleOpenTxDrawer}
-              disabled={accounts.length === 0}
-              className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3.5 text-xs font-semibold text-on-accent hover:bg-accent-hover disabled:opacity-50"
-            >
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              Catat Transaksi
-            </button>
-          ) : null}
+        <div role="tablist" aria-label="Mode kasir dan laporan" className="inline-flex rounded-lg border border-border bg-surface p-1">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'pos'}
+            onClick={() => setTab('pos')}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold ${
+              tab === 'pos'
+                ? 'bg-accent text-on-accent'
+                : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            <Store className="h-3.5 w-3.5" aria-hidden="true" />
+            Mesin Kasir
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'reports'}
+            onClick={() => setTab('reports')}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-semibold ${
+              tab === 'reports'
+                ? 'bg-accent text-on-accent'
+                : 'text-text-secondary hover:text-text-primary'
+            }`}
+          >
+            <TrendingUp className="h-3.5 w-3.5" aria-hidden="true" />
+            Laporan & Riwayat
+          </button>
         </div>
       </div>
 
       {feedback ? (
         <div
           role={feedback.kind === 'error' ? 'alert' : 'status'}
-          className={`flex items-center justify-between rounded-md border px-3.5 py-2.5 text-xs font-medium ${
-            feedback.kind === 'error'
-              ? 'border-[#FECACA] bg-danger-soft text-[#991B1B] dark:border-[#7F1D1D] dark:text-[#FCA5A5]'
-              : 'border-[#BBF7D0] bg-success-soft text-[#14532D] dark:border-[#14532D] dark:text-[#86EFAC]'
+          className={`flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-xs font-medium ${
+            feedback.kind === 'success'
+              ? 'border-[#BBF7D0] bg-success-soft text-[#166534] dark:border-[#14532D] dark:text-[#4ADE80]'
+              : 'border-[#FECACA] bg-danger-soft text-[#991B1B] dark:border-[#7F1D1D] dark:text-[#FCA5A5]'
           }`}
         >
           <span>{feedback.text}</span>
           <button
             type="button"
             onClick={() => setFeedback(null)}
-            className="ml-4 underline"
+            aria-label="Tutup pesan"
+            className="shrink-0 opacity-80 hover:opacity-100"
           >
-            Tutup
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         </div>
       ) : null}
 
-      {/* Account balance cards */}
-      {accountsQuery.isLoading ? (
-        <AccountCardsSkeleton count={4} label="Memuat daftar rekening kas..." />
-      ) : accountsQuery.isError ? (
-        <ErrorState
-          message={(accountsQuery.error as Error).message}
-          onRetry={() => void accountsQuery.refetch()}
-        />
-      ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {accounts.map((acc) => (
-            <div key={acc.id} className="rounded-lg border border-border bg-surface p-4">
-              <div className="flex items-center justify-between text-xs text-text-secondary">
-                <span className="uppercase font-semibold">{acc.type}</span>
-                <Wallet className="h-4 w-4 text-accent" aria-hidden="true" />
+      {tab === 'pos' ? (
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+          {/* Katalog Produk & Scan Barcode */}
+          <div className="space-y-4 xl:col-span-7">
+            <section className="rounded-xl border border-border bg-surface p-4 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleBarcodeOrSearchSubmit(searchQuery);
+                  }}
+                  className="relative flex-1 min-w-[200px]"
+                >
+                  <Search
+                    className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary"
+                    aria-hidden="true"
+                  />
+                  <input
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Cari nama produk, SKU, atau scan barcode lalu Enter..."
+                    className="h-10 w-full rounded-lg border border-border-strong bg-surface-subtle pl-9 pr-3 text-sm text-text-primary"
+                  />
+                </form>
+
+                <button
+                  type="button"
+                  onClick={() => setScannerOpen(true)}
+                  className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-border-strong bg-surface-subtle px-3 text-xs font-semibold text-text-primary hover:border-accent"
+                >
+                  <Camera className="h-4 w-4 text-accent" aria-hidden="true" />
+                  <span>Scan Barcode</span>
+                </button>
+
+                {canCreate ? (
+                  <button
+                    type="button"
+                    onClick={() => setManualDrawerOpen(true)}
+                    className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-border-strong bg-surface px-3 text-xs font-semibold text-text-primary hover:border-accent"
+                  >
+                    <Plus className="h-4 w-4 text-accent" aria-hidden="true" />
+                    <span>Item Manual</span>
+                  </button>
+                ) : null}
               </div>
-              <p className="mt-1 truncate text-sm font-semibold text-text-primary">{acc.name}</p>
-              <p className="mt-2 text-lg font-bold text-text-primary tabular-nums">
-                {formatRupiah(acc.balance)}
+
+              {warehouses.length > 0 ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <label htmlFor="pos-warehouse" className="font-semibold text-text-secondary">
+                    Gudang / Outlet Stok:
+                  </label>
+                  <select
+                    id="pos-warehouse"
+                    value={activeWarehouseId}
+                    onChange={(e) => {
+                      setSelectedWarehouseId(e.target.value);
+                      setCart((prev) => prev.filter((c) => c.inventory_item_id === null));
+                    }}
+                    className="h-8 rounded-md border border-border-strong bg-surface px-2.5 text-xs font-medium text-text-primary"
+                  >
+                    {warehouses.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name}
+                        {w.is_default ? ' (Utama)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+            </section>
+
+            {catalogQuery.isLoading ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {[1, 2, 3, 4, 5, 6].map((n) => (
+                  <div key={n} className="ep-shimmer h-32 rounded-xl border border-border" />
+                ))}
+              </div>
+            ) : catalogQuery.isError ? (
+              <ErrorState
+                message={(catalogQuery.error as Error).message}
+                onRetry={() => void catalogQuery.refetch()}
+              />
+            ) : filteredProducts.length === 0 ? (
+              <EmptyState
+                title="Tidak ada produk ditemukan"
+                description="Tambahkan item di modul Inventaris atau gunakan tombol Item Manual untuk menjual jasa/produk non-stok."
+                actionLabel={canCreate ? 'Tambah Item Manual' : undefined}
+                onAction={canCreate ? () => setManualDrawerOpen(true) : undefined}
+              />
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {filteredProducts.map((p) => {
+                  const stock = productStock(p);
+                  const outOfStock = stock <= 0;
+                  const inCartQty =
+                    cart.find((c) => c.inventory_item_id === p.id)?.qty ?? 0;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      disabled={!canCreate || outOfStock}
+                      onClick={() => addCatalogProduct(p)}
+                      className={`group flex flex-col justify-between rounded-xl border p-3.5 text-left transition-colors ${
+                        outOfStock
+                          ? 'border-border bg-surface-subtle opacity-60'
+                          : inCartQty > 0
+                            ? 'border-accent bg-accent-soft/40 hover:border-accent-hover'
+                            : 'border-border bg-surface hover:border-accent'
+                      }`}
+                    >
+                      <div className="space-y-1.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="font-mono text-[11px] font-medium text-text-secondary">
+                            {p.sku}
+                          </span>
+                          <StatusBadge
+                            tone={
+                              outOfStock
+                                ? 'danger'
+                                : stock <= p.min_stock
+                                  ? 'warning'
+                                  : 'success'
+                            }
+                            label={outOfStock ? 'Habis' : `${stock} ${p.unit}`}
+                          />
+                        </div>
+                        <p className="line-clamp-2 text-sm font-semibold text-text-primary">
+                          {p.name}
+                        </p>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-2">
+                        <span className="font-mono text-sm font-bold text-[#115E59] dark:text-[#34D399]">
+                          {formatRupiah(p.sell_price)}
+                        </span>
+                        {inCartQty > 0 ? (
+                          <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-accent px-2 text-xs font-bold text-on-accent">
+                            {inCartQty}x
+                          </span>
+                        ) : (
+                          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-surface-subtle text-text-primary group-hover:bg-accent group-hover:text-on-accent">
+                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Keranjang & Checkout Panel */}
+          <div className="xl:col-span-5">
+            <section className="sticky top-20 space-y-4 rounded-xl border border-border bg-surface p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-2 border-b border-border pb-3">
+                <div className="flex items-center gap-2">
+                  <ShoppingCart className="h-4 w-4 text-accent" aria-hidden="true" />
+                  <h3 className="font-display text-sm font-bold text-text-primary">
+                    Keranjang Belanja
+                  </h3>
+                  <StatusBadge
+                    tone="accent"
+                    label={`${cart.reduce((a, b) => a + b.qty, 0)} item`}
+                  />
+                </div>
+                {cart.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setCart([])}
+                    className="text-xs font-semibold text-[#991B1B] hover:underline dark:text-[#FCA5A5]"
+                  >
+                    Kosongkan
+                  </button>
+                ) : null}
+              </div>
+
+              {cart.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border bg-surface-subtle px-4 py-8 text-center">
+                  <Barcode className="mx-auto h-7 w-7 text-text-secondary" aria-hidden="true" />
+                  <p className="mt-2 text-xs font-semibold text-text-primary">
+                    Keranjang masih kosong
+                  </p>
+                  <p className="mt-1 text-xs text-text-secondary">
+                    Pilih produk di sebelah kiri, scan barcode, atau tambah item manual.
+                  </p>
+                </div>
+              ) : (
+                <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                  {cart.map((item) => (
+                    <div
+                      key={item.key}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-subtle px-3 py-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-semibold text-text-primary">
+                          {item.item_name}
+                        </p>
+                        <p className="font-mono text-[11px] text-text-secondary">
+                          {formatRupiah(item.unit_price)} / {item.unit}
+                          {item.inventory_item_id === null ? ' · Manual' : ''}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          aria-label={`Kurangi ${item.item_name}`}
+                          onClick={() => updateCartQty(item.key, item.qty - 1)}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded border border-border-strong bg-surface text-text-primary"
+                        >
+                          <Minus className="h-3 w-3" aria-hidden="true" />
+                        </button>
+                        <span className="w-7 text-center font-mono text-xs font-bold tabular-nums">
+                          {item.qty}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`Tambah ${item.item_name}`}
+                          onClick={() => updateCartQty(item.key, item.qty + 1)}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded border border-border-strong bg-surface text-text-primary"
+                        >
+                          <Plus className="h-3 w-3" aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Hapus ${item.item_name}`}
+                          onClick={() => updateCartQty(item.key, 0)}
+                          className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded text-[#991B1B] hover:bg-danger-soft dark:text-[#FCA5A5]"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label htmlFor="pos-customer" className="block text-[11px] font-semibold text-text-secondary">
+                    Nama Pelanggan (Opsional)
+                  </label>
+                  <input
+                    id="pos-customer"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    placeholder="Umum"
+                    className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="pos-note" className="block text-[11px] font-semibold text-text-secondary">
+                    Catatan Struk (Opsional)
+                  </label>
+                  <input
+                    id="pos-note"
+                    value={saleNote}
+                    onChange={(e) => setSaleNote(e.target.value)}
+                    placeholder="Catatan kasir..."
+                    className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Diskon & PPN */}
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <span className="block text-[11px] font-semibold text-text-secondary">
+                    Diskon
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <select
+                      aria-label="Tipe diskon"
+                      value={discountType}
+                      onChange={(e) => {
+                        setDiscountType(e.target.value as PosDiscountType);
+                        setDiscountInput('');
+                      }}
+                      className="h-9 rounded-md border border-border-strong bg-surface px-2 text-xs"
+                    >
+                      <option value="none">Tanpa</option>
+                      <option value="amount">Rp</option>
+                      <option value="percent">%</option>
+                    </select>
+                    {discountType !== 'none' ? (
+                      <input
+                        type="number"
+                        min={0}
+                        max={discountType === 'percent' ? 100 : undefined}
+                        value={discountInput}
+                        onChange={(e) => setDiscountInput(e.target.value)}
+                        placeholder={discountType === 'percent' ? '0-100' : 'Nominal'}
+                        className="h-9 min-w-0 flex-1 rounded-md border border-border-strong bg-surface px-2.5 font-mono text-xs"
+                      />
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label htmlFor="pos-tax" className="block text-[11px] font-semibold text-text-secondary">
+                    PPN / Pajak (%)
+                  </label>
+                  <select
+                    id="pos-tax"
+                    value={taxPercent}
+                    onChange={(e) => setTaxPercent(Number(e.target.value))}
+                    className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-xs"
+                  >
+                    <option value={0}>0% (Tanpa PPN)</option>
+                    <option value={11}>11% (PPN)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Metode Pembayaran & Akun Kas */}
+              <div className="space-y-2 border-t border-border pt-3">
+                <span className="block text-[11px] font-semibold text-text-secondary">
+                  Metode Pembayaran
+                </span>
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                  {PAYMENT_OPTIONS.map((opt) => {
+                    const Icon = opt.icon;
+                    const active = paymentMethod === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          setPaymentMethod(opt.id);
+                          setAccountId(defaultAccountForMethod(accounts, opt.id));
+                        }}
+                        className={`flex h-9 items-center justify-center gap-1 rounded-md border text-xs font-semibold ${
+                          active
+                            ? 'border-accent bg-accent-soft text-[#115E59] dark:text-[#34D399]'
+                            : 'border-border-strong bg-surface-subtle text-text-primary'
+                        }`}
+                      >
+                        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-1">
+                  <label htmlFor="pos-account" className="block text-[11px] font-semibold text-text-secondary">
+                    Masuk ke Akun Kas / Rekening
+                  </label>
+                  <select
+                    id="pos-account"
+                    value={accountId}
+                    onChange={(e) => setAccountId(e.target.value)}
+                    className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-xs"
+                  >
+                    {accounts.map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} ({acc.type.toUpperCase()}) · {formatRupiah(acc.balance)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Nominal Bayar Tunai & Kembalian */}
+              {paymentMethod === 'cash' ? (
+                <div className="space-y-2 rounded-lg border border-border bg-surface-subtle p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <label htmlFor="pos-cash-paid" className="text-[11px] font-semibold text-text-secondary">
+                      Uang Tunai Diterima
+                    </label>
+                    <div className="flex flex-wrap gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setCashPaidInput(String(totals.totalAmount || ''))}
+                        className="rounded border border-border-strong bg-surface px-2 py-0.5 text-[11px] font-semibold text-text-primary hover:border-accent"
+                      >
+                        Pas
+                      </button>
+                      {[50000, 100000, 200000].map((amt) => (
+                        <button
+                          key={amt}
+                          type="button"
+                          onClick={() => setCashPaidInput(String(amt))}
+                          className="rounded border border-border-strong bg-surface px-2 py-0.5 font-mono text-[11px] font-semibold text-text-primary hover:border-accent"
+                        >
+                          {amt / 1000}rb
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <input
+                    id="pos-cash-paid"
+                    type="number"
+                    min={0}
+                    value={cashPaidInput}
+                    onChange={(e) => setCashPaidInput(e.target.value)}
+                    placeholder={totals.totalAmount > 0 ? String(totals.totalAmount) : 'Nominal tunai'}
+                    className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 font-mono text-sm font-semibold"
+                  />
+                  {totals.cashInsufficient ? (
+                    <p className="text-[11px] font-semibold text-[#991B1B] dark:text-[#FCA5A5]">
+                      Nominal kurang dari total tagihan.
+                    </p>
+                  ) : (
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-text-secondary">Kembalian</span>
+                      <span className="font-mono font-bold text-[#115E59] dark:text-[#34D399]">
+                        {formatRupiah(totals.changeAmount)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {/* Ringkasan Total */}
+              <div className="space-y-1.5 border-t border-border pt-3 text-xs">
+                <div className="flex justify-between text-text-secondary">
+                  <span>Subtotal</span>
+                  <span className="font-mono">{formatRupiah(totals.subtotal)}</span>
+                </div>
+                {totals.discountAmount > 0 ? (
+                  <div className="flex justify-between text-[#115E59] dark:text-[#34D399]">
+                    <span>Diskon</span>
+                    <span className="font-mono">-{formatRupiah(totals.discountAmount)}</span>
+                  </div>
+                ) : null}
+                {totals.taxAmount > 0 ? (
+                  <div className="flex justify-between text-text-secondary">
+                    <span>PPN ({taxPercent}%)</span>
+                    <span className="font-mono">{formatRupiah(totals.taxAmount)}</span>
+                  </div>
+                ) : null}
+                <div className="flex items-baseline justify-between border-t border-border pt-2">
+                  <span className="font-display text-sm font-bold text-text-primary">Total Bayar</span>
+                  <span className="font-mono text-xl font-bold text-[#115E59] dark:text-[#34D399]">
+                    {formatRupiah(totals.totalAmount)}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={
+                  !canCreate ||
+                  cart.length === 0 ||
+                  totals.totalAmount <= 0 ||
+                  totals.cashInsufficient ||
+                  createSaleMut.isPending
+                }
+                onClick={() => void handleCheckout()}
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent hover:bg-accent-hover disabled:opacity-50"
+              >
+                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                {createSaleMut.isPending ? 'Memproses Penjualan...' : 'Bayar & Terbitkan Struk'}
+              </button>
+            </section>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* KPI Cards Laporan Penjualan */}
+          <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-border bg-surface p-4">
+              <p className="text-xs font-medium text-text-secondary">Omzet Hari Ini</p>
+              <p className="mt-1.5 font-mono text-xl font-bold text-text-primary tabular-nums">
+                {formatRupiah(report?.today_revenue ?? '0')}
+              </p>
+              <p className="mt-1 text-xs text-text-secondary">
+                {report?.today_count ?? 0} transaksi selesai hari ini
               </p>
             </div>
-          ))}
+            <div className="rounded-xl border border-border bg-surface p-4">
+              <p className="text-xs font-medium text-text-secondary">Rata-Rata Belanja</p>
+              <p className="mt-1.5 font-mono text-xl font-bold text-text-primary tabular-nums">
+                {formatRupiah(report?.today_avg_ticket ?? '0')}
+              </p>
+              <p className="mt-1 text-xs text-text-secondary">Rata-rata nilai struk hari ini</p>
+            </div>
+            <div className="rounded-xl border border-border bg-surface p-4">
+              <p className="text-xs font-medium text-text-secondary">Total Penjualan POS</p>
+              <p className="mt-1.5 font-mono text-xl font-bold text-[#115E59] dark:text-[#34D399] tabular-nums">
+                {formatRupiah(report?.period_revenue ?? '0')}
+              </p>
+              <p className="mt-1 text-xs text-text-secondary">
+                {report?.period_count ?? 0} transaksi selesai · Diskon {formatRupiah(report?.period_discount_total ?? '0')}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border bg-surface p-4">
+              <p className="text-xs font-medium text-text-secondary">Retur / Void</p>
+              <p className="mt-1.5 font-mono text-xl font-bold text-text-primary tabular-nums">
+                {report?.void_count ?? 0} transaksi
+              </p>
+              <p className="mt-1 text-xs text-text-secondary">
+                PPN terhimpun {formatRupiah(report?.period_tax_total ?? '0')}
+              </p>
+            </div>
+          </section>
+
+          {/* Breakdown Metode Pembayaran, Rekening & Produk Terlaris */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+            <section className="rounded-xl border border-border bg-surface p-4 space-y-3 lg:col-span-7">
+              <h3 className="font-display text-sm font-bold text-text-primary">
+                Ringkasan Metode Bayar & Saldo Kas
+              </h3>
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                {(['cash', 'qris', 'transfer', 'ewallet'] as PosPaymentMethod[]).map((m) => {
+                  const row = report?.by_payment_method[m];
+                  return (
+                    <div
+                      key={m}
+                      className="rounded-lg border border-border bg-surface-subtle p-2.5"
+                    >
+                      <p className="text-[11px] font-semibold text-text-secondary">
+                        {paymentMethodLabel(m)}
+                      </p>
+                      <p className="mt-1 font-mono text-xs font-bold text-text-primary">
+                        {formatRupiah(row?.total ?? '0')}
+                      </p>
+                      <p className="text-[11px] text-text-secondary">{row?.count ?? 0}x</p>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                {(report?.accounts ?? accounts).map((acc) => (
+                  <span
+                    key={acc.id}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-subtle px-3 py-1 text-xs"
+                  >
+                    <span className="font-semibold text-text-primary">{acc.name}:</span>
+                    <span className="font-mono font-bold text-[#115E59] dark:text-[#34D399]">
+                      {formatRupiah(acc.balance)}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-border bg-surface p-4 space-y-3 lg:col-span-5">
+              <h3 className="font-display text-sm font-bold text-text-primary">
+                Top Produk Terlaris
+              </h3>
+              {!report || report.top_products.length === 0 ? (
+                <p className="text-xs text-text-secondary">
+                  Belum ada data penjualan produk POS.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {report.top_products.map((tp, idx) => (
+                    <div
+                      key={`${tp.sku}-${tp.item_name}-${idx}`}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-subtle px-3 py-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-text-primary">{tp.item_name}</p>
+                        <p className="text-[11px] text-text-secondary">
+                          {tp.qty_sold} {tp.unit} terjual
+                        </p>
+                      </div>
+                      <span className="font-mono font-bold text-text-primary shrink-0">
+                        {formatRupiah(tp.revenue)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+
+          {/* Riwayat Penjualan Kasir */}
+          <section className="rounded-xl border border-border bg-surface p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="font-display text-sm font-bold text-text-primary">
+                Riwayat Transaksi Kasir
+              </h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  placeholder="Cari no. struk / kasir / pelanggan..."
+                  className="h-9 rounded-md border border-border-strong bg-surface px-3 text-xs"
+                />
+                <select
+                  aria-label="Filter status POS"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="h-9 rounded-md border border-border-strong bg-surface px-2.5 text-xs"
+                >
+                  <option value="">Semua Status</option>
+                  <option value="completed">Selesai</option>
+                  <option value="void">Void / Retur</option>
+                </select>
+                <select
+                  aria-label="Filter metode bayar POS"
+                  value={methodFilter}
+                  onChange={(e) => setMethodFilter(e.target.value)}
+                  className="h-9 rounded-md border border-border-strong bg-surface px-2.5 text-xs"
+                >
+                  <option value="">Semua Metode</option>
+                  <option value="cash">Tunai</option>
+                  <option value="qris">QRIS</option>
+                  <option value="transfer">Transfer</option>
+                  <option value="ewallet">E-Wallet</option>
+                </select>
+              </div>
+            </div>
+
+            {salesQuery.isLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((n) => (
+                  <div key={n} className="ep-shimmer h-14 rounded-lg border border-border" />
+                ))}
+              </div>
+            ) : salesList.length === 0 ? (
+              <EmptyState
+                title="Belum ada transaksi kasir"
+                description="Mulai penjualan pertama melalui tab Mesin Kasir."
+                actionLabel="Buka Mesin Kasir"
+                onAction={() => setTab('pos')}
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-border text-[11px] uppercase text-text-secondary">
+                      <th className="py-2 pr-3">No. Struk</th>
+                      <th className="py-2 pr-3">Waktu</th>
+                      <th className="py-2 pr-3">Kasir & Pelanggan</th>
+                      <th className="py-2 pr-3">Item</th>
+                      <th className="py-2 pr-3">Metode</th>
+                      <th className="py-2 pr-3">Total</th>
+                      <th className="py-2 pr-3">Status</th>
+                      <th className="py-2 text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {salesList.map((s) => (
+                      <tr key={s.id} className="hover:bg-surface-subtle/60">
+                        <td className="py-2.5 pr-3 font-mono font-semibold text-text-primary">
+                          {s.sale_number}
+                        </td>
+                        <td className="py-2.5 pr-3 text-text-secondary tabular-nums">
+                          {formatDateTimeId(s.created_at)}
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <p className="font-semibold text-text-primary">{s.cashier_name}</p>
+                          <p className="text-[11px] text-text-secondary">
+                            {s.customer_name || 'Pelanggan Umum'}
+                          </p>
+                        </td>
+                        <td className="py-2.5 pr-3 text-text-secondary">
+                          {s.items.length} item ({s.items.reduce((a, b) => a + b.qty, 0)} qty)
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <StatusBadge tone="neutral" label={paymentMethodLabel(s.payment_method)} />
+                        </td>
+                        <td className="py-2.5 pr-3 font-mono font-bold text-text-primary">
+                          {formatRupiah(s.total_amount)}
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <StatusBadge
+                            tone={s.status === 'completed' ? 'success' : 'danger'}
+                            label={s.status === 'completed' ? 'Selesai' : 'Void'}
+                          />
+                        </td>
+                        <td className="py-2.5 text-right">
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setActiveReceipt(s)}
+                              className="inline-flex h-8 items-center gap-1 rounded border border-border-strong bg-surface px-2.5 text-xs font-semibold text-text-primary hover:border-accent"
+                            >
+                              <Receipt className="h-3.5 w-3.5" aria-hidden="true" />
+                              Struk
+                            </button>
+                            {canApprove && s.status === 'completed' ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setVoidTarget(s);
+                                  setVoidReason('');
+                                }}
+                                className="inline-flex h-8 items-center gap-1 rounded border border-border-strong bg-surface px-2.5 text-xs font-semibold text-[#991B1B] hover:bg-danger-soft dark:text-[#FCA5A5]"
+                              >
+                                <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
+                                Void
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
         </div>
       )}
 
-      {/* Sub-tabs */}
-      <div
-        role="tablist"
-        aria-label="Submodul keuangan"
-        className="flex flex-wrap gap-1 border-b border-border pb-2"
-      >
-        {(
-          [
-            ['transactions', 'Riwayat Transaksi'],
-            ['accounts', 'Rekening & Kategori'],
-            ['obligations', 'Hutang & Piutang'],
-          ] as Array<[FinanceTab, string]>
-        ).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            role="tab"
-            aria-selected={tab === key}
-            onClick={() => setTab(key)}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
-              tab === key
-                ? 'bg-accent text-on-accent'
-                : 'bg-surface-subtle text-text-primary hover:bg-surface'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'transactions' ? (
-        transactionsQuery.isLoading ? (
-          <TableSkeleton columns={6} rows={6} label="Memuat riwayat transaksi keuangan..." />
-        ) : transactionsQuery.isError ? (
-          <ErrorState
-            message={(transactionsQuery.error as Error).message}
-            onRetry={() => void transactionsQuery.refetch()}
-          />
-        ) : (
-          <DataTable
-            data={filteredTransactions}
-            columns={txColumns}
-            searchPlaceholder="Cari deskripsi, rekening, kategori..."
-            filterLabel="Jenis"
-            filterValue={typeFilter}
-            onFilterChange={setTypeFilter}
-            filterOptions={[
-              { value: 'all', label: 'Semua Jenis' },
-              { value: 'income', label: 'Pemasukan' },
-              { value: 'expense', label: 'Pengeluaran' },
-              { value: 'transfer', label: 'Transfer Kas' },
-            ]}
-            enableSelection={canApprove}
-            bulkActions={(selected, clear) => (
-              <button
-                type="button"
-                onClick={async () => {
-                  const pendings = selected.filter((s) => s.status === 'pending');
-                  for (const item of pendings) {
-                    await approveTxMutation.mutateAsync(item.id);
-                  }
-                  clear();
-                }}
-                className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-semibold text-on-accent"
-              >
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                Setujui Terpilih ({selected.filter((s) => s.status === 'pending').length})
-              </button>
-            )}
-            exportConfig={{
-              filename: 'transaksi-keuangan-myekalliptus.csv',
-              headers: ['ID', 'Waktu', 'Jenis', 'Rekening', 'Kategori', 'Nominal', 'Status', 'Deskripsi'],
-              mapRow: (r) => [
-                r.id,
-                r.transacted_at,
-                r.type,
-                r.account_name,
-                r.category_name || '-',
-                r.amount,
-                r.status,
-                r.description,
-              ],
-            }}
-            emptySlot={
-              <EmptyState
-                title="Belum ada transaksi tercatat"
-                description="Mulai catat pemasukan, pengeluaran, atau transfer antar kas untuk melacak laba/rugi."
-                actionLabel={canCreate ? 'Catat Transaksi Pertama' : undefined}
-                onAction={canCreate ? handleOpenTxDrawer : undefined}
-              />
-            }
-          />
-        )
-      ) : null}
-
-      {tab === 'accounts' ? (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <div className="rounded-lg border border-border bg-surface p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="font-display text-sm font-bold text-text-primary">
-                Daftar Rekening Kas
-              </h3>
-              {canCreate ? (
-                <button
-                  type="button"
-                  onClick={() => setAccDrawerOpen(true)}
-                  className="inline-flex items-center gap-1 rounded-md border border-border-strong bg-surface-subtle px-2.5 py-1.5 text-xs font-semibold text-text-primary hover:border-accent"
-                >
-                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                  Tambah Rekening
-                </button>
-              ) : null}
-            </div>
-            <ul className="divide-y divide-border text-sm">
-              {accounts.map((acc) => (
-                <li key={acc.id} className="flex items-center justify-between py-2.5">
-                  <div>
-                    <p className="font-semibold text-text-primary">{acc.name}</p>
-                    <p className="text-xs text-text-secondary">
-                      {acc.type.toUpperCase()} {acc.account_number ? `(${acc.account_number})` : ''}
-                    </p>
-                  </div>
-                  <span className="font-bold tabular-nums text-text-primary">
-                    {formatRupiah(acc.balance)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="rounded-lg border border-border bg-surface p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="font-display text-sm font-bold text-text-primary">
-                Kategori Keuangan
-              </h3>
-              {canCreate ? (
-                <button
-                  type="button"
-                  onClick={() => setCatDrawerOpen(true)}
-                  className="inline-flex items-center gap-1 rounded-md border border-border-strong bg-surface-subtle px-2.5 py-1.5 text-xs font-semibold text-text-primary hover:border-accent"
-                >
-                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                  Tambah Kategori
-                </button>
-              ) : null}
-            </div>
-            <ul className="divide-y divide-border text-sm">
-              {categories.map((cat) => (
-                <li key={cat.id} className="flex items-center justify-between py-2">
-                  <span className="font-medium text-text-primary">{cat.name}</span>
-                  <StatusBadge
-                    tone={cat.kind === 'income' ? 'success' : 'warning'}
-                    label={cat.kind === 'income' ? 'Pemasukan' : 'Pengeluaran'}
-                  />
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      ) : null}
-
-      {tab === 'obligations' ? (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap gap-3 text-xs text-text-secondary">
-              <span>
-                Piutang Terbuka:{' '}
-                <strong className="text-text-primary tabular-nums">
-                  {formatRupiah(summaryQuery.data?.open_receivable ?? '0')}
-                </strong>
-              </span>
-              <span>
-                Hutang Terbuka:{' '}
-                <strong className="text-text-primary tabular-nums">
-                  {formatRupiah(summaryQuery.data?.open_payable ?? '0')}
-                </strong>
-              </span>
-            </div>
-            {canCreate ? (
-              <button
-                type="button"
-                onClick={() => setObDrawerOpen(true)}
-                className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-semibold text-on-accent"
-              >
-                <Receipt className="h-3.5 w-3.5" aria-hidden="true" />
-                Catat Hutang / Piutang
-              </button>
-            ) : null}
-          </div>
-
-          {obligationsQuery.isLoading ? (
-            <TableSkeleton columns={5} rows={4} label="Memuat daftar hutang & piutang..." />
-          ) : obligations.length === 0 ? (
-            <EmptyState
-              title="Belum ada catatan hutang atau piutang"
-              description="Catat tagihan pelanggan (piutang) atau kewajiban vendor (hutang) untuk dipantau jatuh temponya."
-              actionLabel={canCreate ? 'Buat Catatan Pertama' : undefined}
-              onAction={canCreate ? () => setObDrawerOpen(true) : undefined}
-            />
-          ) : (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              {obligations.map((ob) => {
-                const remaining = BigInt(ob.amount) - BigInt(ob.paid_amount);
-                return (
-                  <div key={ob.id} className="rounded-lg border border-border bg-surface p-4 space-y-2.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <StatusBadge
-                          tone={ob.kind === 'receivable' ? 'info' : 'warning'}
-                          label={ob.kind === 'receivable' ? 'Piutang' : 'Hutang'}
-                        />
-                        <h4 className="mt-1.5 font-semibold text-text-primary">
-                          {ob.counterparty_name}
-                        </h4>
-                      </div>
-                      <StatusBadge
-                        tone={ob.status === 'paid' ? 'success' : 'neutral'}
-                        label={ob.status.toUpperCase()}
-                      />
-                    </div>
-                    <div className="flex flex-wrap justify-between gap-2 text-xs text-text-secondary">
-                      <span>
-                        Total: <strong className="tabular-nums text-text-primary">{formatRupiah(ob.amount)}</strong>
-                      </span>
-                      <span>
-                        Sisa: <strong className="tabular-nums text-text-primary">{formatRupiah(remaining)}</strong>
-                      </span>
-                      <span>Jatuh tempo: {formatDateId(ob.due_date)}</span>
-                    </div>
-                    {canApprove && ob.status !== 'paid' && ob.status !== 'void' ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPayObTarget(ob);
-                          setPayAccId(accounts[0]?.id ?? '');
-                          setPayAmount(remaining.toString());
-                        }}
-                        className="mt-1 inline-flex items-center gap-1 rounded-md border border-border-strong bg-surface-subtle px-3 py-1.5 text-xs font-semibold text-text-primary hover:border-accent"
-                      >
-                        Bayar / Catat Pelunasan
-                      </button>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      ) : null}
-
-      {/* SlideOver: Catat Transaksi */}
+      {/* SlideOver: Tambah Item Manual Non-Stok */}
       <SlideOver
-        open={txDrawerOpen}
-        onClose={() => setTxDrawerOpen(false)}
-        title="Catat Transaksi Keuangan"
-        subtitle="Eksekusi atomik ACID di PostgreSQL dengan dukungan lampiran struk S3"
+        open={manualDrawerOpen}
+        onClose={() => setManualDrawerOpen(false)}
+        title="Tambah Item / Jasa Manual"
+        subtitle="Item manual masuk ke struk tanpa mengurangi stok gudang"
       >
-        <form onSubmit={submitTransaction} className="space-y-4">
-          <div className="space-y-1.5">
-            <label htmlFor="tx-type" className="block text-xs font-semibold text-text-primary">
-              Jenis Transaksi
-            </label>
-            <select
-              id="tx-type"
-              value={txType}
-              onChange={(e) => setTxType(e.target.value as 'income' | 'expense' | 'transfer')}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-sm"
-            >
-              <option value="expense">Pengeluaran Kas</option>
-              <option value="income">Pemasukan Kas</option>
-              <option value="transfer">Transfer Antar Rekening</option>
-            </select>
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="tx-account" className="block text-xs font-semibold text-text-primary">
-              Rekening Sumber
-            </label>
-            <select
-              id="tx-account"
-              value={txAccountId}
-              onChange={(e) => setTxAccountId(e.target.value)}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-sm"
-              required
-            >
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} ({formatRupiah(a.balance)})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {txType === 'transfer' ? (
-            <div className="space-y-1.5">
-              <label htmlFor="tx-target" className="block text-xs font-semibold text-text-primary">
-                Rekening Tujuan
-              </label>
-              <select
-                id="tx-target"
-                value={txTargetAccountId}
-                onChange={(e) => setTxTargetAccountId(e.target.value)}
-                className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-sm"
-                required
-              >
-                {accounts
-                  .filter((a) => a.id !== txAccountId)
-                  .map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name} ({formatRupiah(a.balance)})
-                    </option>
-                  ))}
-              </select>
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              <label htmlFor="tx-cat" className="block text-xs font-semibold text-text-primary">
-                Kategori
-              </label>
-              <select
-                id="tx-cat"
-                value={txCategoryId}
-                onChange={(e) => setTxCategoryId(e.target.value)}
-                className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-sm"
-              >
-                <option value="">Tanpa kategori</option>
-                {categories
-                  .filter((c) => c.kind === txType)
-                  .map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-              </select>
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <label htmlFor="tx-amount" className="block text-xs font-semibold text-text-primary">
-              Nominal (IDR bulat)
+        <form onSubmit={handleAddManualItem} className="space-y-4">
+          <div className="space-y-1">
+            <label htmlFor="pos-manual-name" className="block text-xs font-semibold">
+              Nama Produk / Jasa
             </label>
             <input
-              id="tx-amount"
-              type="number"
-              min={1}
-              step={1}
+              id="pos-manual-name"
               required
-              value={txAmount}
-              onChange={(e) => setTxAmount(e.target.value)}
-              placeholder="Contoh: 250000"
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm tabular-nums"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="tx-desc" className="block text-xs font-semibold text-text-primary">
-              Deskripsi Transaksi
-            </label>
-            <textarea
-              id="tx-desc"
-              rows={2}
-              required
-              value={txDesc}
-              onChange={(e) => setTxDesc(e.target.value)}
-              placeholder="Keperluan pembayaran, nomor invoice, atau referensi"
-              className="w-full rounded-md border border-border-strong bg-surface p-2.5 text-sm"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="tx-status" className="block text-xs font-semibold text-text-primary">
-              Status Posting
-            </label>
-            <select
-              id="tx-status"
-              value={txStatus}
-              onChange={(e) => setTxStatus(e.target.value as 'posted' | 'pending')}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-sm"
-            >
-              <option value="posted">Posted langsung (ubah saldo sekarang)</option>
-              <option value="pending">Pending approval</option>
-            </select>
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="tx-receipt" className="block text-xs font-semibold text-text-primary">
-              Lampiran Struk / Nota (Opsional)
-            </label>
-            <input
-              id="tx-receipt"
-              type="file"
-              accept="image/*,application/pdf"
-              onChange={(e) => void handleReceiptUpload(e.target.files?.[0])}
-              className="block w-full text-xs text-text-secondary"
-            />
-            {uploadingReceipt ? (
-              <p className="text-xs text-text-secondary">Mengunggah ke Neon Object Storage...</p>
-            ) : txReceiptKey ? (
-              <p className="text-xs font-medium text-success">Terunggah: {txReceiptKey}</p>
-            ) : null}
-          </div>
-
-          <button
-            type="submit"
-            disabled={createTxMutation.isPending || uploadingReceipt}
-            className="h-10 w-full rounded-md bg-accent text-sm font-semibold text-on-accent hover:bg-accent-hover disabled:opacity-50"
-          >
-            {createTxMutation.isPending ? 'Menyimpan...' : 'Simpan Transaksi'}
-          </button>
-        </form>
-      </SlideOver>
-
-      {/* SlideOver: Tambah Rekening */}
-      <SlideOver
-        open={accDrawerOpen}
-        onClose={() => setAccDrawerOpen(false)}
-        title="Tambah Rekening Kas"
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            createAccMutation.mutate({
-              name: accName.trim(),
-              type: accType,
-              account_number: accNumber.trim() || null,
-              initial_balance: Math.max(0, Math.trunc(Number(accInitial) || 0)),
-            });
-          }}
-          className="space-y-4"
-        >
-          <div className="space-y-1.5">
-            <label htmlFor="acc-name" className="block text-xs font-semibold">
-              Nama Rekening
-            </label>
-            <input
-              id="acc-name"
-              required
-              value={accName}
-              onChange={(e) => setAccName(e.target.value)}
+              value={manualName}
+              onChange={(e) => setManualName(e.target.value)}
+              placeholder="Contoh: Ongkir Kurir / Jasa Pasang"
               className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm"
             />
           </div>
-          <div className="space-y-1.5">
-            <label htmlFor="acc-type" className="block text-xs font-semibold">
-              Tipe Rekening
-            </label>
-            <select
-              id="acc-type"
-              value={accType}
-              onChange={(e) => setAccType(e.target.value as FinanceAccount['type'])}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-sm"
-            >
-              <option value="cash">Cash / Tunai</option>
-              <option value="bank">Rekening Bank</option>
-              <option value="ewallet">E-Wallet</option>
-              <option value="qris">Merchant QRIS</option>
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="acc-num" className="block text-xs font-semibold">
-              Nomor Rekening (Opsional)
-            </label>
-            <input
-              id="acc-num"
-              value={accNumber}
-              onChange={(e) => setAccNumber(e.target.value)}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm tabular-nums"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="acc-init" className="block text-xs font-semibold">
-              Saldo Awal (IDR)
-            </label>
-            <input
-              id="acc-init"
-              type="number"
-              min={0}
-              value={accInitial}
-              onChange={(e) => setAccInitial(e.target.value)}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm tabular-nums"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={createAccMutation.isPending}
-            className="h-10 w-full rounded-md bg-accent text-sm font-semibold text-on-accent"
-          >
-            {createAccMutation.isPending ? 'Menyimpan...' : 'Simpan Rekening'}
-          </button>
-        </form>
-      </SlideOver>
-
-      {/* SlideOver: Tambah Kategori */}
-      <SlideOver
-        open={catDrawerOpen}
-        onClose={() => setCatDrawerOpen(false)}
-        title="Tambah Kategori Keuangan"
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            createCatMutation.mutate({ name: catName.trim(), kind: catKind });
-          }}
-          className="space-y-4"
-        >
-          <div className="space-y-1.5">
-            <label htmlFor="cat-name" className="block text-xs font-semibold">
-              Nama Kategori
-            </label>
-            <input
-              id="cat-name"
-              required
-              value={catName}
-              onChange={(e) => setCatName(e.target.value)}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="cat-kind" className="block text-xs font-semibold">
-              Kelompok
-            </label>
-            <select
-              id="cat-kind"
-              value={catKind}
-              onChange={(e) => setCatKind(e.target.value as 'income' | 'expense')}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-sm"
-            >
-              <option value="expense">Pengeluaran</option>
-              <option value="income">Pemasukan</option>
-            </select>
-          </div>
-          <button
-            type="submit"
-            disabled={createCatMutation.isPending}
-            className="h-10 w-full rounded-md bg-accent text-sm font-semibold text-on-accent"
-          >
-            {createCatMutation.isPending ? 'Menyimpan...' : 'Simpan Kategori'}
-          </button>
-        </form>
-      </SlideOver>
-
-      {/* SlideOver: Catat Hutang/Piutang */}
-      <SlideOver
-        open={obDrawerOpen}
-        onClose={() => setObDrawerOpen(false)}
-        title="Catat Hutang atau Piutang"
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            createObMutation.mutate({
-              kind: obKind,
-              counterparty_name: obCounterparty.trim(),
-              amount: Math.max(1, Math.trunc(Number(obAmount) || 0)),
-              due_date: obDueDate || null,
-              note: obNote.trim() || null,
-            });
-          }}
-          className="space-y-4"
-        >
-          <div className="space-y-1.5">
-            <label htmlFor="ob-kind" className="block text-xs font-semibold">
-              Jenis Kewajiban
-            </label>
-            <select
-              id="ob-kind"
-              value={obKind}
-              onChange={(e) => setObKind(e.target.value as 'receivable' | 'payable')}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-sm"
-            >
-              <option value="receivable">Piutang (Tagihan Masuk)</option>
-              <option value="payable">Hutang (Kewajiban Keluar)</option>
-            </select>
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="ob-counterparty" className="block text-xs font-semibold">
-              Nama Pihak / Klien / Vendor
-            </label>
-            <input
-              id="ob-counterparty"
-              required
-              value={obCounterparty}
-              onChange={(e) => setObCounterparty(e.target.value)}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="ob-amount" className="block text-xs font-semibold">
-              Nominal (IDR)
-            </label>
-            <input
-              id="ob-amount"
-              type="number"
-              min={1}
-              required
-              value={obAmount}
-              onChange={(e) => setObAmount(e.target.value)}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm tabular-nums"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="ob-due" className="block text-xs font-semibold">
-              Jatuh Tempo (Opsional)
-            </label>
-            <input
-              id="ob-due"
-              type="date"
-              value={obDueDate}
-              onChange={(e) => setObDueDate(e.target.value)}
-              className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="ob-note" className="block text-xs font-semibold">
-              Catatan
-            </label>
-            <textarea
-              id="ob-note"
-              rows={2}
-              value={obNote}
-              onChange={(e) => setObNote(e.target.value)}
-              className="w-full rounded-md border border-border-strong bg-surface p-2.5 text-sm"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={createObMutation.isPending}
-            className="h-10 w-full rounded-md bg-accent text-sm font-semibold text-on-accent"
-          >
-            {createObMutation.isPending ? 'Menyimpan...' : 'Simpan Catatan'}
-          </button>
-        </form>
-      </SlideOver>
-
-      {/* SlideOver: Bayar Hutang/Piutang */}
-      <SlideOver
-        open={Boolean(payObTarget)}
-        onClose={() => setPayObTarget(null)}
-        title={payObTarget ? `Pembayaran ${payObTarget.counterparty_name}` : 'Pembayaran'}
-      >
-        {payObTarget ? (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              payObMutation.mutate({
-                id: payObTarget.id,
-                account_id: payAccId,
-                amount: Math.max(1, Math.trunc(Number(payAmount) || 0)),
-                note: payNote.trim() || null,
-              });
-            }}
-            className="space-y-4"
-          >
-            <div className="space-y-1.5">
-              <label htmlFor="pay-acc" className="block text-xs font-semibold">
-                Rekening Pembayaran
-              </label>
-              <select
-                id="pay-acc"
-                value={payAccId}
-                onChange={(e) => setPayAccId(e.target.value)}
-                className="h-9 w-full rounded-md border border-border-strong bg-surface px-2.5 text-sm"
-              >
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} ({formatRupiah(a.balance)})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label htmlFor="pay-amt" className="block text-xs font-semibold">
-                Nominal Dibayar (IDR)
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label htmlFor="pos-manual-price" className="block text-xs font-semibold">
+                Harga Satuan (Rp)
               </label>
               <input
-                id="pay-amt"
+                id="pos-manual-price"
                 type="number"
                 min={1}
                 required
-                value={payAmount}
-                onChange={(e) => setPayAmount(e.target.value)}
-                className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm tabular-nums"
+                value={manualPrice}
+                onChange={(e) => setManualPrice(e.target.value)}
+                className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 font-mono text-sm"
               />
             </div>
-            <div className="space-y-1.5">
-              <label htmlFor="pay-note" className="block text-xs font-semibold">
-                Catatan (Opsional)
+            <div className="space-y-1">
+              <label htmlFor="pos-manual-qty" className="block text-xs font-semibold">
+                Qty
               </label>
               <input
-                id="pay-note"
-                value={payNote}
-                onChange={(e) => setPayNote(e.target.value)}
-                className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm"
+                id="pos-manual-qty"
+                type="number"
+                min={1}
+                required
+                value={manualQty}
+                onChange={(e) => setManualQty(e.target.value)}
+                className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 font-mono text-sm"
               />
             </div>
-            <button
-              type="submit"
-              disabled={payObMutation.isPending}
-              className="h-10 w-full rounded-md bg-accent text-sm font-semibold text-on-accent"
-            >
-              {payObMutation.isPending ? 'Memposting...' : 'Konfirmasi Pembayaran'}
-            </button>
-          </form>
-        ) : null}
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="pos-manual-unit" className="block text-xs font-semibold">
+              Satuan
+            </label>
+            <input
+              id="pos-manual-unit"
+              value={manualUnit}
+              onChange={(e) => setManualUnit(e.target.value)}
+              placeholder="pcs / paket / jam"
+              className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm"
+            />
+          </div>
+          <button
+            type="submit"
+            className="h-10 w-full rounded-lg bg-accent text-xs font-semibold text-on-accent hover:bg-accent-hover"
+          >
+            Tambahkan ke Keranjang
+          </button>
+        </form>
       </SlideOver>
+
+      <PosBarcodeScannerModal
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onDetected={handleBarcodeOrSearchSubmit}
+      />
+
+      <PosReceiptModal
+        sale={activeReceipt}
+        onClose={() => setActiveReceipt(null)}
+        onDownloadPdf={handleDownloadReceiptPdf}
+        pdfBusy={pdfLoading}
+      />
+
+      {/* Modal Konfirmasi Void / Retur POS */}
+      {voidTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="fixed inset-0 bg-black/60"
+            aria-hidden="true"
+            onClick={() => setVoidTarget(null)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pos-void-title"
+            className="relative z-10 w-full max-w-md space-y-4 rounded-xl border border-border bg-surface p-5 text-text-primary shadow-xl"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-danger-soft text-[#991B1B] dark:text-[#FCA5A5]">
+                <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div>
+                <h3 id="pos-void-title" className="font-display text-base font-bold text-text-primary">
+                  Void / Retur Transaksi {voidTarget.sale_number}?
+                </h3>
+                <p className="mt-1 text-xs text-text-secondary">
+                  Saldo kas ({formatRupiah(voidTarget.total_amount)}) akan ditarik kembali dan stok produk gudang akan dipulihkan otomatis.
+                </p>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="pos-void-reason" className="block text-xs font-semibold">
+                Alasan Retur / Void (Opsional)
+              </label>
+              <input
+                id="pos-void-reason"
+                value={voidReason}
+                onChange={(e) => setVoidReason(e.target.value)}
+                placeholder="Contoh: Salah input metode bayar / barang dikembalikan"
+                className="h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-xs"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setVoidTarget(null)}
+                className="h-9 rounded-md border border-border-strong px-3 text-xs font-semibold text-text-primary hover:bg-surface-subtle"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={voidSaleMut.isPending}
+                onClick={() =>
+                  voidSaleMut.mutate({ id: voidTarget.id, reason: voidReason })
+                }
+                className="h-9 rounded-md bg-[#B91C1C] px-3.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {voidSaleMut.isPending ? 'Memproses...' : 'Ya, Void & Kembalikan Stok'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

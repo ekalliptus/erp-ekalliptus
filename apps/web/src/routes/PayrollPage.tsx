@@ -16,6 +16,7 @@ export function PayrollPage({ me }: { me: MeResponse }) {
   const canUpdate = hasPermission(me.permissions, 'payroll', 'update');
   const canApprove = hasPermission(me.permissions, 'payroll', 'approve');
   const canFinanceView = hasPermission(me.permissions, 'finance', 'view');
+  const canViewAllPayroll = me.role === 'owner' || me.role === 'hr' || me.role === 'finance';
 
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(
@@ -221,7 +222,7 @@ export function PayrollPage({ me }: { me: MeResponse }) {
                       {formatDateId(run.period_start)} - {formatDateId(run.period_end)}
                     </p>
                     <p className="mt-1 text-xs font-bold tabular-nums text-text-secondary">
-                      {formatRupiah(run.total_disbursed)}
+                      {canViewAllPayroll ? formatRupiah(run.total_disbursed) : 'Slip Gaji Pribadi'}
                     </p>
                   </div>
                   <StatusBadge
@@ -246,9 +247,15 @@ export function PayrollPage({ me }: { me: MeResponse }) {
               <div className="rounded-lg border border-border bg-surface p-5 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
                   <div>
-                    <p className="text-xs text-text-secondary">Total Pencairan Bersih</p>
+                    <p className="text-xs text-text-secondary">
+                      {canViewAllPayroll ? 'Total Pencairan Bersih' : 'Slip Gaji Pribadi'}
+                    </p>
                     <p className="text-xl font-bold tabular-nums text-text-primary">
-                      {formatRupiah(runDetail.total_disbursed)}
+                      {canViewAllPayroll
+                        ? formatRupiah(runDetail.total_disbursed)
+                        : items[0]
+                          ? formatRupiah(items[0].net_salary)
+                          : 'Terbatas RBAC'}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">

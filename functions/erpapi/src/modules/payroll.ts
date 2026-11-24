@@ -19,6 +19,7 @@ import { emitErpEvent, writeAuditLog } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { generatePayrollSlipPdf } from '../services/pdf.js';
 import { formatRupiah, notifyUsersInTx } from '../services/notify.js';
+import { canViewAllEmployeesData } from '../services/security-policy.js';
 import { createPresignedDownloadUrl, uploadObject } from '../services/storage.js';
 import type { AppEnv } from '../types.js';
 import type { ErpModulePlugin } from './plugin.js';
@@ -35,11 +36,16 @@ class HttpStatusError extends Error {
 const router = new Hono<AppEnv>();
 
 router.get('/runs', requirePermission('payroll', 'view'), async (c) => {
+  const auth = c.get('auth');
+  const canViewAll = canViewAllEmployeesData(auth.roleCode);
   const rows = await getDb()
     .select()
     .from(payroll_runs)
     .orderBy(desc(payroll_runs.created_at));
-  return c.json({ runs: jsonSafe(rows) });
+  const sanitizedRows = canViewAll
+    ? rows
+    : rows.map((row) => ({ ...row, total_disbursed: 0n, finance_account_id: null }));
+  return c.json({ runs: jsonSafe(sanitizedRows) });
 });
 
 router.get('/runs/:id', requirePermission('payroll', 'view'), async (c) => {
@@ -51,8 +57,10 @@ router.get('/runs/:id', requirePermission('payroll', 'view'), async (c) => {
   const [run] = await db.select().from(payroll_runs).where(eq(payroll_runs.id, id)).limit(1);
   if (!run) return c.json({ error: 'Payroll run not found.' }, 404);
 
-  const canViewAll =
-    auth.roleCode === 'owner' || auth.roleCode === 'hr' || auth.roleCode === 'finance';
+  const canViewAll = canViewAllEmployeesData(auth.roleCode);
+  const sanitizedRun = canViewAll
+    ? run
+    : { ...run, total_disbursed: 0n, finance_account_id: null };
 
   const items = await db
     .select({
@@ -79,7 +87,7 @@ router.get('/runs/:id', requirePermission('payroll', 'view'), async (c) => {
     )
     .orderBy(employees.employee_code);
 
-  return c.json({ run: jsonSafe(run), items: jsonSafe(items) });
+  return c.json({ run: jsonSafe(sanitizedRun), items: jsonSafe(items) });
 });
 
 router.post('/runs', requirePermission('payroll', 'create'), async (c) => {
@@ -275,7 +283,7 @@ router.post('/runs/:id/approve', requirePermission('payroll', 'approve'), async 
     afterData: updated,
   });
 
-  await emitErpEvent(db, 'erp:attendance', 'payroll_approved', {
+  await emitErpEvent(db, 'erp:finance', 'payroll_approved', {
     payroll_run_id: runId,
     total_disbursed: updated.total_disbursed.toString(),
   });
@@ -415,11 +423,6 @@ router.post('/runs/:id/pay', requirePermission('payroll', 'approve'), async (c) 
         payroll_run_id: run.id,
         finance_transaction_id: finTxId,
         amount: totalNet.toString(),
-      });
-      await emitErpEvent(tx, 'erp:attendance', 'payroll_paid', {
-        payroll_run_id: run.id,
-        period_start: run.period_start,
-        period_end: run.period_end,
       });
 
       for (const item of items) {

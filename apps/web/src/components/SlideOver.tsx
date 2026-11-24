@@ -16,14 +16,17 @@ export function SlideOver({
 }) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
     previousFocusRef.current = document.activeElement as HTMLElement | null;
     const focusTimer = setTimeout(() => {
-      const firstInput = panelRef.current?.querySelector<HTMLElement>(
-        'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])',
+      const firstInput = contentRef.current?.querySelector<HTMLElement>(
+        'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])',
       );
       (firstInput ?? panelRef.current)?.focus();
     }, 10);
@@ -31,7 +34,7 @@ export function SlideOver({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -41,7 +44,7 @@ export function SlideOver({
       window.removeEventListener('keydown', onKeyDown);
       previousFocusRef.current?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -78,7 +81,9 @@ export function SlideOver({
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
+        <div ref={contentRef} className="flex-1 overflow-y-auto px-5 py-4">
+          {children}
+        </div>
       </div>
     </div>
   );

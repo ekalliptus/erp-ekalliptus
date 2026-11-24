@@ -7,7 +7,8 @@ export type ModuleSkeletonVariant =
   | 'attendance'
   | 'payroll'
   | 'rbac'
-  | 'audit';
+  | 'audit'
+  | 'profile';
 
 export function SkeletonBlock({ className = '' }: { className?: string }) {
   return <div aria-hidden="true" className={`ep-shimmer rounded-md ${className}`} />;

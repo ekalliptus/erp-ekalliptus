@@ -1,28 +1,31 @@
-import { getApps, initializeApp } from 'firebase/app';
-import {
-  getMessaging,
-  getToken,
-  isSupported,
-  onMessage,
-  type MessagePayload,
-  type Messaging,
-} from 'firebase/messaging';
+import type { MessagePayload, Messaging } from 'firebase/messaging';
 import { erpApi } from './api.js';
 import { firebaseWebConfig } from './firebase-config.js';
 
 let messaging: Messaging | null = null;
+let messagingModulePromise: Promise<typeof import('firebase/messaging')> | null = null;
+
+function loadMessagingModule() {
+  if (!messagingModulePromise) {
+    messagingModulePromise = import('firebase/messaging');
+  }
+  return messagingModulePromise;
+}
 
 export function notificationSupported(): boolean {
   return (
     typeof window !== 'undefined' &&
     'serviceWorker' in navigator &&
-    'Notification' in window &&
-    'serviceWorker' in navigator
+    'Notification' in window
   );
 }
 
 export async function ensureFirebaseMessaging(): Promise<Messaging | null> {
   if (!notificationSupported()) return null;
+  const [{ getApps, initializeApp }, { getMessaging, isSupported }] = await Promise.all([
+    import('firebase/app'),
+    loadMessagingModule(),
+  ]);
   if (!(await isSupported().catch(() => false))) return null;
   if (!messaging) {
     const app = getApps().length > 0 ? getApps()[0]! : initializeApp(firebaseWebConfig);
@@ -35,11 +38,10 @@ export type WebNotificationResult = 'granted' | 'denied' | 'unavailable';
 
 export async function enableWebNotifications(): Promise<WebNotificationResult> {
   if (!notificationSupported()) return 'unavailable';
-  if (!(await isSupported().catch(() => false)) || !('Notification' in window)) return 'unavailable';
   const permission = await Notification.requestPermission();
-  if (permission !== 'granted') return permission === 'default' ? 'denied' : 'denied';
-  const messaging = await ensureFirebaseMessaging();
-  if (!messaging) return 'unavailable';
+  if (permission !== 'granted') return 'denied';
+  const m = await ensureFirebaseMessaging();
+  if (!m) return 'unavailable';
 
   const vapidKey = import.meta.env.VITE_FCM_VAPID_KEY as string | undefined;
   if (!vapidKey) {
@@ -47,19 +49,28 @@ export async function enableWebNotifications(): Promise<WebNotificationResult> {
     return 'granted';
   }
 
-  const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
-  const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: registration });
+  const [{ getToken }, registration] = await Promise.all([
+    loadMessagingModule(),
+    navigator.serviceWorker.register('/firebase-messaging-sw.js'),
+  ]);
+  const token = await getToken(m, { vapidKey, serviceWorkerRegistration: registration });
   if (!token) return 'granted';
   await erpApi.notifications.registerToken({ token, platform: 'web' });
   return 'granted';
 }
 
 export function onForegroundMessage(cb: (payload: MessagePayload) => void): () => void {
+  if (!notificationSupported() || Notification.permission !== 'granted') {
+    return () => {};
+  }
+  let disposed = false;
   let unsub: (() => void) | null = null;
-  void ensureFirebaseMessaging().then((m) => {
-    if (m) unsub = onMessage(m, cb);
+  void Promise.all([ensureFirebaseMessaging(), loadMessagingModule()]).then(([m, mod]) => {
+    if (disposed || !m) return;
+    unsub = mod.onMessage(m, cb);
   });
   return () => {
+    disposed = true;
     unsub?.();
   };
 }

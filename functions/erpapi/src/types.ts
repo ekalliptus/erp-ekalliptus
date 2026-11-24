@@ -7,10 +7,12 @@ export interface AuthEmployee {
   employee_code: string;
   full_name: string;
   email: string;
+  username: string | null;
   phone: string | null;
   base_salary: bigint;
   is_active: boolean;
   avatar_object_key: string | null;
+  created_at: Date;
 }
 
 export interface AuthContext {
@@ -18,6 +20,7 @@ export interface AuthContext {
   employee: AuthEmployee;
   roleCode: RoleCode;
   roleName: string;
+  roleDescription: string;
   permissions: Set<string>;
   platform: PlatformKind;
 }

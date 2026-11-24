@@ -7,18 +7,27 @@ import {
   inventory_items,
   inventory_stocks,
   payroll_runs,
+  roles,
 } from '@ekalliptus/db';
 import { and, eq, isNull, lte, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { getDb, jsonSafe } from './db.js';
 import { checkRateLimit, clientIp } from './services/rate-limit.js';
+import {
+  consumePendingNotificationHint,
+  dispatchPendingNotifications,
+} from './services/notify.js';
+import { resolveMeKpiScopes } from './services/security-policy.js';
+import { createPresignedDownloadUrl } from './services/storage.js';
 import { createAuthMiddleware, extractBearerToken, verifyAuthToken } from './middleware/auth.js';
+import { appReleasesPlugin } from './modules/app-releases.js';
 import { attendancePlugin } from './modules/attendance.js';
 import { financePlugin } from './modules/finance.js';
 import { inventoryPlugin } from './modules/inventory.js';
 import { payrollPlugin } from './modules/payroll.js';
 import { registerErpPlugins } from './modules/plugin.js';
+import { profilePlugin } from './modules/profile.js';
 import { rbacPlugin } from './modules/rbac.js';
 import { realtimePlugin } from './modules/realtime.js';
 import { notificationsPlugin } from './modules/notifications.js';
@@ -72,6 +81,58 @@ app.post('/api/auth/username-lookup', async (c) => {
     .where(and(eq(employees.username, parsed.data.username), eq(employees.is_active, true)))
     .limit(1);
   return c.json({ email: row?.email ?? null });
+});
+
+app.post('/api/auth/claim-preview', async (c) => {
+  if (!checkRateLimit('claim-preview:' + clientIp(c), 12, 60_000)) {
+    return c.json({ error: 'Terlalu banyak percobaan. Coba lagi sebentar.' }, 429);
+  }
+  const body = await c.req.json().catch(() => null);
+  const parsed = claimAccountSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+  const codeHash = crypto
+    .createHash('sha256')
+    .update(parsed.data.code.trim().toUpperCase())
+    .digest('hex');
+
+  const [row] = await getDb()
+    .select({
+      employee_code: employees.employee_code,
+      full_name: employees.full_name,
+      email: employees.email,
+      username: employees.username,
+      is_active: employees.is_active,
+      auth_user_id: employees.auth_user_id,
+      role_code: roles.code,
+      role_name: roles.name,
+    })
+    .from(employees)
+    .innerJoin(roles, eq(roles.id, employees.role_id))
+    .where(eq(employees.claim_code_hash, codeHash))
+    .limit(1);
+
+  if (!row) {
+    return c.json({ error: 'Kode aktivasi tidak ditemukan atau sudah digunakan.' }, 404);
+  }
+  if (row.auth_user_id) {
+    return c.json({ error: 'Akun karyawan ini sudah aktif dan tertaut.' }, 409);
+  }
+  if (!row.is_active) {
+    return c.json({ error: 'Akun karyawan ini sedang dinonaktifkan. Hubungi owner/HR.' }, 403);
+  }
+
+  return c.json({
+    valid: true,
+    employee: {
+      employee_code: row.employee_code,
+      full_name: row.full_name,
+      email: row.email,
+      username: row.username,
+      role_code: row.role_code,
+      role_name: row.role_name,
+    },
+  });
 });
 
 
@@ -128,7 +189,12 @@ app.use('/api/*', async (c, next) => {
     c.req.path === '/api/health' ||
     c.req.path === '/api/realtime/events' ||
     c.req.path === '/api/auth/username-lookup' ||
-    c.req.path === '/api/auth/claim'
+    c.req.path === '/api/auth/claim-preview' ||
+    c.req.path === '/api/auth/claim' ||
+    ((c.req.path === '/api/app/version' ||
+      c.req.path === '/api/app/changelog' ||
+      c.req.path === '/api/app/download/android') &&
+      c.req.method === 'GET')
   ) {
     await next();
     return;
@@ -161,53 +227,79 @@ app.post('/api/me/username', async (c) => {
 app.get('/api/me', async (c) => {
   const auth = c.get('auth');
   const db = getDb();
+  const scopes = resolveMeKpiScopes(auth.roleCode, auth.permissions);
 
-  const [cashSum] = await db
-    .select({
-      total_balance: sql<string>`coalesce(sum(${finance_accounts.balance}), 0)::text`,
-    })
-    .from(finance_accounts)
-    .where(eq(finance_accounts.is_active, true));
+  const [cashSum, lowStockCount, pendingLeaves, draftPayrolls] = await Promise.all([
+    scopes.canViewFinance
+      ? db
+          .select({
+            total_balance: sql<string>`coalesce(sum(${finance_accounts.balance}), 0)::text`,
+          })
+          .from(finance_accounts)
+          .where(eq(finance_accounts.is_active, true))
+      : Promise.resolve([{ total_balance: '0' }]),
+    scopes.canViewInventory
+      ? db
+          .select({
+            count: sql<number>`count(*)::int`,
+          })
+          .from(inventory_stocks)
+          .innerJoin(inventory_items, eq(inventory_items.id, inventory_stocks.item_id))
+          .where(lte(inventory_stocks.qty, inventory_items.min_stock))
+      : Promise.resolve([{ count: 0 }]),
+    scopes.canApproveAttendance
+      ? db
+          .select({
+            count: sql<number>`count(*)::int`,
+          })
+          .from(attendances)
+          .where(eq(attendances.approval_status, 'pending'))
+      : Promise.resolve([{ count: 0 }]),
+    scopes.canManagePayroll
+      ? db
+          .select({
+            count: sql<number>`count(*)::int`,
+          })
+          .from(payroll_runs)
+          .where(eq(payroll_runs.status, 'draft'))
+      : Promise.resolve([{ count: 0 }]),
+  ]);
 
-  const [lowStockCount] = await db
-    .select({
-      count: sql<number>`count(*)::int`,
-    })
-    .from(inventory_stocks)
-    .innerJoin(inventory_items, eq(inventory_items.id, inventory_stocks.item_id))
-    .where(lte(inventory_stocks.qty, inventory_items.min_stock));
-
-  const [pendingLeaves] = await db
-    .select({
-      count: sql<number>`count(*)::int`,
-    })
-    .from(attendances)
-    .where(eq(attendances.approval_status, 'pending'));
-
-  const [draftPayrolls] = await db
-    .select({
-      count: sql<number>`count(*)::int`,
-    })
-    .from(payroll_runs)
-    .where(eq(payroll_runs.status, 'draft'));
+  let avatarUrl: string | null = null;
+  if (auth.employee.avatar_object_key) {
+    try {
+      avatarUrl = await createPresignedDownloadUrl({
+        key: auth.employee.avatar_object_key,
+        expiresIn: 3600,
+      });
+    } catch {
+      avatarUrl = null;
+    }
+  }
 
   return c.json({
-    employee: jsonSafe(auth.employee),
+    employee: jsonSafe({
+      ...auth.employee,
+      avatar_url: avatarUrl,
+    }),
     role: auth.roleCode,
     role_name: auth.roleName,
+    role_description: auth.roleDescription,
     permissions: Array.from(auth.permissions).sort(),
     platform: auth.platform,
     kpis: {
-      total_cash_balance: cashSum?.total_balance ?? '0',
-      low_stock_alerts: lowStockCount?.count ?? 0,
-      pending_attendance_approvals: pendingLeaves?.count ?? 0,
-      draft_payroll_runs: draftPayrolls?.count ?? 0,
+      total_cash_balance: cashSum[0]?.total_balance ?? '0',
+      low_stock_alerts: lowStockCount[0]?.count ?? 0,
+      pending_attendance_approvals: pendingLeaves[0]?.count ?? 0,
+      draft_payroll_runs: draftPayrolls[0]?.count ?? 0,
     },
   });
 });
 
 const apiRouter = new Hono<AppEnv>();
 registerErpPlugins(apiRouter, [
+  appReleasesPlugin,
+  profilePlugin,
   financePlugin,
   inventoryPlugin,
   attendancePlugin,
@@ -217,6 +309,19 @@ registerErpPlugins(apiRouter, [
   realtimePlugin,
   notificationsPlugin,
 ]);
+
+app.use('/api/*', async (c, next) => {
+  await next();
+  if (
+    c.req.method !== 'GET' &&
+    c.req.method !== 'OPTIONS' &&
+    c.req.method !== 'HEAD' &&
+    c.res.status < 400 &&
+    consumePendingNotificationHint()
+  ) {
+    await dispatchPendingNotifications();
+  }
+});
 
 app.route('/api', apiRouter);
 

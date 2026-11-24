@@ -130,6 +130,7 @@ export function createAuthMiddleware(allowQueryToken = false) {  return async (c
       employee: emp,
       roleCode: roleRow.code as RoleCode,
       roleName: roleRow.name,
+      roleDescription: roleRow.description ?? '',
       permissions: permissionSet,
       platform: parsePlatform(c.req.header('x-platform')),
     });

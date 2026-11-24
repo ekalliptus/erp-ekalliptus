@@ -9,7 +9,7 @@ import { SlideOver } from '../components/SlideOver.tsx';
 import { EmptyState, ErrorState } from '../components/StateViews.tsx';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { erpApi, type AuditLogRow, type MeResponse } from '../lib/api.ts';
-import { formatDateTimeId } from '../lib/format.ts';
+import { formatDateTimeId, formatPlatformLabel } from '../lib/format.ts';
 
 export function AuditPage({ me }: { me: MeResponse }) {
   const canView = hasPermission(me.permissions, 'audit', 'view');
@@ -44,12 +44,13 @@ export function AuditPage({ me }: { me: MeResponse }) {
         ),
       },
       {
-        accessorKey: 'platform',
+        id: 'platform',
+        accessorFn: (row) => formatPlatformLabel(row.platform),
         header: 'Platform',
         cell: ({ row }) => (
           <StatusBadge
             tone={row.original.platform === 'flutter' ? 'info' : 'accent'}
-            label={row.original.platform.toUpperCase()}
+            label={formatPlatformLabel(row.original.platform)}
           />
         ),
       },
@@ -68,7 +69,7 @@ export function AuditPage({ me }: { me: MeResponse }) {
         header: 'ID Entitas',
         cell: ({ row }) => (
           <span className="font-mono text-xs text-text-secondary">
-            {row.original.entity_id.slice(0, 18)}
+            {(row.original.entity_id ?? '-').slice(0, 18)}
           </span>
         ),
       },
@@ -107,8 +108,7 @@ export function AuditPage({ me }: { me: MeResponse }) {
           Immutable Audit Trail
         </h2>
         <p className="text-xs text-text-secondary">
-          Rekam jejak seluruh perubahan data sensitif dari Web Command Center maupun Flutter Native
-          App
+          Rekam jejak seluruh perubahan data sensitif dari Web Command Center maupun Aplikasi Android
         </p>
       </div>
 
@@ -142,10 +142,10 @@ export function AuditPage({ me }: { me: MeResponse }) {
             mapRow: (l) => [
               l.created_at,
               l.actor_email || 'system',
-              l.platform,
+              formatPlatformLabel(l.platform),
               l.module,
               l.action,
-              l.entity_id,
+              l.entity_id ?? '',
             ],
           }}
         />
@@ -155,7 +155,11 @@ export function AuditPage({ me }: { me: MeResponse }) {
         open={Boolean(selectedLog)}
         onClose={() => setSelectedLog(null)}
         title={selectedLog ? `Detail Audit: ${selectedLog.action}` : 'Detail Audit'}
-        subtitle={selectedLog ? `${selectedLog.module.toUpperCase()} (${selectedLog.platform})` : undefined}
+        subtitle={
+          selectedLog
+            ? `${selectedLog.module.toUpperCase()} (${formatPlatformLabel(selectedLog.platform)})`
+            : undefined
+        }
       >
         {selectedLog ? (
           <div className="space-y-4 text-xs">

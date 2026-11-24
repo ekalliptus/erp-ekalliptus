@@ -146,6 +146,102 @@ class SkeletonCard extends StatelessWidget {
   }
 }
 
+class _SkeletonHeroCard extends StatelessWidget {
+  final double height;
+  final Widget child;
+
+  const _SkeletonHeroCard({
+    required this.height,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    return Card(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(t.radiusXl),
+        side: BorderSide(color: t.border, width: 1),
+      ),
+      child: SizedBox(
+        height: height,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class _SkeletonFilterPillRow extends StatelessWidget {
+  final int count;
+
+  const _SkeletonFilterPillRow({this.count = 4});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    return SizedBox(
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: count,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) => SkeletonBox(
+          width: i == 0 ? 74 : 96,
+          height: 44,
+          radius: t.radiusPill,
+        ),
+      ),
+    );
+  }
+}
+
+class _SkeletonListRowCard extends StatelessWidget {
+  const _SkeletonListRowCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    return SkeletonCard(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Row(
+        children: [
+          SkeletonBox(width: 42, height: 42, radius: t.radiusMd),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                FractionallySizedBox(
+                  widthFactor: 0.72,
+                  child: SkeletonBox(width: double.infinity, height: 14),
+                ),
+                SizedBox(height: 7),
+                FractionallySizedBox(
+                  widthFactor: 0.92,
+                  child: SkeletonBox(width: double.infinity, height: 11),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          const Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              SkeletonBox(width: 68, height: 13),
+              SizedBox(height: 6),
+              SkeletonBox(width: 60, height: 20, radius: 9999),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class LazyListShimmerFooter extends StatelessWidget {
   final String label;
 
@@ -162,25 +258,7 @@ class LazyListShimmerFooter extends StatelessWidget {
       child: const ShimmerScope(
         child: Padding(
           padding: EdgeInsets.only(bottom: 8),
-          child: SkeletonCard(
-            padding: EdgeInsets.all(14),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SkeletonBox(width: 150, height: 14),
-                      SizedBox(height: 8),
-                      SkeletonBox(width: 210, height: 11),
-                    ],
-                  ),
-                ),
-                SizedBox(width: 12),
-                SkeletonBox(width: 72, height: 22, radius: 9999),
-              ],
-            ),
-          ),
+          child: _SkeletonListRowCard(),
         ),
       ),
     );
@@ -203,10 +281,25 @@ class DashboardSkeleton extends StatelessWidget {
       liveRegion: true,
       child: ShimmerScope(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 108),
           children: [
-            SkeletonCard(
-              padding: const EdgeInsets.all(18),
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SkeletonBox(width: 120, height: 20),
+                    SizedBox(height: 6),
+                    SkeletonBox(width: 150, height: 12),
+                  ],
+                ),
+                SkeletonBox(width: 84, height: 24, radius: 9999),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _SkeletonHeroCard(
+              height: 168,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -214,23 +307,43 @@ class DashboardSkeleton extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       SkeletonBox(width: 132, height: 12),
-                      SkeletonBox(width: 84, height: 24, radius: 9999),
+                      SkeletonBox(width: 78, height: 22, radius: 9999),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  const SkeletonBox(width: 210, height: 28),
-                  const SizedBox(height: 18),
-                  Row(
-                    children: [
-                      SkeletonBox(width: 116, height: 40, radius: t.radiusMd),
-                      const SizedBox(width: 10),
-                      SkeletonBox(width: 112, height: 40, radius: t.radiusMd),
-                    ],
-                  ),
+                  const SizedBox(height: 14),
+                  const SkeletonBox(width: 200, height: 28),
+                  const Spacer(),
+                  SkeletonBox(width: 140, height: 34, radius: t.radiusPill),
                 ],
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 18),
+            const SkeletonBox(width: 110, height: 15),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                for (var i = 0; i < 4; i++) ...[
+                  if (i > 0) const SizedBox(width: 10),
+                  Expanded(
+                    child: SkeletonCard(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                      child: SizedBox(
+                        height: 54,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SkeletonBox(width: 34, height: 34, radius: t.radiusMd),
+                            const SizedBox(height: 6),
+                            const SkeletonBox(width: 48, height: 10),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 18),
             const Row(
               children: [
                 Expanded(
@@ -240,14 +353,14 @@ class DashboardSkeleton extends StatelessWidget {
                       children: [
                         SkeletonBox(width: 80, height: 12),
                         SizedBox(height: 10),
-                        SkeletonBox(width: 96, height: 22),
-                        SizedBox(height: 10),
-                        SkeletonBox(width: 84, height: 22, radius: 9999),
+                        SkeletonBox(width: 72, height: 22),
+                        SizedBox(height: 8),
+                        SkeletonBox(width: 90, height: 11),
                       ],
                     ),
                   ),
                 ),
-                SizedBox(width: 12),
+                SizedBox(width: 10),
                 Expanded(
                   child: SkeletonCard(
                     child: Column(
@@ -255,53 +368,23 @@ class DashboardSkeleton extends StatelessWidget {
                       children: [
                         SkeletonBox(width: 88, height: 12),
                         SizedBox(height: 10),
-                        SkeletonBox(width: 104, height: 22),
-                        SizedBox(height: 10),
-                        SkeletonBox(width: 78, height: 22, radius: 9999),
+                        SkeletonBox(width: 72, height: 22),
+                        SizedBox(height: 8),
+                        SkeletonBox(width: 90, height: 11),
                       ],
                     ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 14),
-            const SkeletonCard(
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SkeletonBox(width: 140, height: 15),
-                        SizedBox(height: 8),
-                        SkeletonBox(width: 210, height: 12),
-                      ],
-                    ),
-                  ),
-                  SizedBox(width: 12),
-                  SkeletonBox(width: 20, height: 20),
-                ],
-              ),
+            const SizedBox(height: 18),
+            const SkeletonBox(width: 140, height: 15),
+            const SizedBox(height: 8),
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: _SkeletonListRowCard(),
             ),
-            const SizedBox(height: 10),
-            const SkeletonCard(
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SkeletonBox(width: 190, height: 15),
-                        SizedBox(height: 8),
-                        SkeletonBox(width: 230, height: 12),
-                      ],
-                    ),
-                  ),
-                  SizedBox(width: 12),
-                  SkeletonBox(width: 20, height: 20),
-                ],
-              ),
-            ),
+            const _SkeletonListRowCard(),
           ],
         ),
       ),
@@ -325,84 +408,61 @@ class FinanceSkeleton extends StatelessWidget {
       liveRegion: true,
       child: ShimmerScope(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 108),
           children: [
-            SkeletonCard(
+            _SkeletonHeroCard(
+              height: 176,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const SkeletonBox(width: 140, height: 12),
                   const SizedBox(height: 10),
-                  const SkeletonBox(width: 200, height: 26),
-                  const SizedBox(height: 12),
-                  const Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  const SkeletonBox(width: 196, height: 28),
+                  const Spacer(),
+                  Row(
                     children: [
-                      SkeletonBox(width: 120, height: 12),
-                      SkeletonBox(width: 120, height: 12),
+                      Expanded(child: SkeletonBox(height: 46, radius: t.radiusMd)),
+                      const SizedBox(width: 10),
+                      Expanded(child: SkeletonBox(height: 46, radius: t.radiusMd)),
                     ],
                   ),
-                  const SizedBox(height: 14),
-                  SkeletonBox(width: 190, height: 40, radius: t.radiusMd),
                 ],
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 16),
+            const SkeletonBox(width: 130, height: 15),
+            const SizedBox(height: 8),
             SizedBox(
-              height: 92,
+              height: 98,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
+                physics: const NeverScrollableScrollPhysics(),
                 itemCount: 3,
                 separatorBuilder: (_, __) => const SizedBox(width: 10),
                 itemBuilder: (_, __) => const SizedBox(
-                  width: 195,
+                  width: 172,
                   child: SkeletonCard(
-                    padding: EdgeInsets.all(12),
+                    padding: EdgeInsets.all(14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        SkeletonBox(width: 112, height: 14),
+                        SkeletonBox(width: 108, height: 13),
                         SizedBox(height: 10),
-                        SkeletonBox(width: 132, height: 16),
+                        SkeletonBox(width: 124, height: 16),
                       ],
                     ),
                   ),
                 ),
               ),
             ),
-            const SizedBox(height: 18),
-            const SkeletonBox(width: 220, height: 16),
-            const SizedBox(height: 10),
+            const SizedBox(height: 14),
+            const _SkeletonFilterPillRow(count: 5),
+            const SizedBox(height: 14),
             for (var i = 0; i < 4; i++)
               const Padding(
                 padding: EdgeInsets.only(bottom: 8),
-                child: SkeletonCard(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SkeletonBox(width: 165, height: 14),
-                            SizedBox(height: 8),
-                            SkeletonBox(width: 190, height: 11),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          SkeletonBox(width: 82, height: 14),
-                          SizedBox(height: 6),
-                          SkeletonBox(width: 64, height: 20, radius: 9999),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
+                child: _SkeletonListRowCard(),
               ),
           ],
         ),
@@ -427,7 +487,7 @@ class InventorySkeleton extends StatelessWidget {
       liveRegion: true,
       child: ShimmerScope(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 108),
           children: [
             Row(
               children: [
@@ -437,37 +497,56 @@ class InventorySkeleton extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            SkeletonBox(width: double.infinity, height: 44, radius: t.radiusMd),
-            const SizedBox(height: 14),
-            for (var i = 0; i < 5; i++)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 8),
-                child: SkeletonCard(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SkeletonBox(width: 175, height: 14),
-                            SizedBox(height: 8),
-                            SkeletonBox(width: 155, height: 11),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          SkeletonBox(width: 56, height: 14),
-                          SizedBox(height: 6),
-                          SkeletonBox(width: 68, height: 20, radius: 9999),
-                        ],
-                      ),
-                    ],
+            const Row(
+              children: [
+                Expanded(
+                  child: SkeletonCard(
+                    padding: EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SkeletonBox(width: 72, height: 11),
+                        SizedBox(height: 8),
+                        SkeletonBox(width: 48, height: 22),
+                        SizedBox(height: 6),
+                        SkeletonBox(width: 96, height: 11),
+                      ],
+                    ),
                   ),
                 ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: SkeletonCard(
+                    padding: EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SkeletonBox(width: 72, height: 11),
+                        SizedBox(height: 8),
+                        SkeletonBox(width: 48, height: 22),
+                        SizedBox(height: 6),
+                        SkeletonBox(width: 96, height: 11),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(child: SkeletonBox(height: 48, radius: t.radiusMd)),
+                const SizedBox(width: 10),
+                Expanded(child: SkeletonBox(height: 48, radius: t.radiusMd)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const _SkeletonFilterPillRow(count: 3),
+            const SizedBox(height: 12),
+            for (var i = 0; i < 4; i++)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: _SkeletonListRowCard(),
               ),
           ],
         ),
@@ -492,11 +571,21 @@ class AttendanceSkeleton extends StatelessWidget {
       liveRegion: true,
       child: ShimmerScope(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 108),
           children: [
-            SkeletonCard(
+            Row(
+              children: [
+                for (var i = 0; i < 7; i++) ...[
+                  if (i > 0) const SizedBox(width: 6),
+                  Expanded(child: SkeletonBox(height: 62, radius: t.radiusMd)),
+                ],
+              ],
+            ),
+            const SizedBox(height: 12),
+            _SkeletonHeroCard(
+              height: 176,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -506,16 +595,8 @@ class AttendanceSkeleton extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      SkeletonBox(width: 96, height: 34, radius: t.radiusMd),
-                      const SizedBox(width: 8),
-                      SkeletonBox(width: 96, height: 34, radius: t.radiusMd),
-                      const SizedBox(width: 8),
-                      SkeletonBox(width: 84, height: 34, radius: t.radiusMd),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
+                  const SkeletonBox(width: 190, height: 20),
+                  const Spacer(),
                   Row(
                     children: [
                       Expanded(child: SkeletonBox(height: 44, radius: t.radiusMd)),
@@ -526,31 +607,13 @@ class AttendanceSkeleton extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            const SkeletonBox(width: 160, height: 16),
-            const SizedBox(height: 10),
-            for (var i = 0; i < 4; i++)
+            const SizedBox(height: 14),
+            const _SkeletonFilterPillRow(count: 3),
+            const SizedBox(height: 12),
+            for (var i = 0; i < 3; i++)
               const Padding(
                 padding: EdgeInsets.only(bottom: 8),
-                child: SkeletonCard(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SkeletonBox(width: 180, height: 14),
-                            SizedBox(height: 8),
-                            SkeletonBox(width: 215, height: 11),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      SkeletonBox(width: 86, height: 22, radius: 9999),
-                    ],
-                  ),
-                ),
+                child: _SkeletonListRowCard(),
               ),
           ],
         ),
@@ -569,61 +632,42 @@ class PayrollSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
     return Semantics(
       label: label,
       liveRegion: true,
       child: ShimmerScope(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 108),
           children: [
-            const SkeletonCard(
+            const _SkeletonFilterPillRow(count: 3),
+            const SizedBox(height: 12),
+            _SkeletonHeroCard(
+              height: 170,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
+                  const Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      SkeletonBox(width: 170, height: 16),
+                      SkeletonBox(width: 170, height: 14),
                       SkeletonBox(width: 72, height: 22, radius: 9999),
                     ],
                   ),
-                  SizedBox(height: 12),
-                  SkeletonBox(width: 195, height: 24),
+                  const SizedBox(height: 12),
+                  const SkeletonBox(width: 190, height: 28),
+                  const Spacer(),
+                  SkeletonBox(width: double.infinity, height: 44, radius: t.radiusMd),
                 ],
               ),
             ),
             const SizedBox(height: 16),
-            const SkeletonBox(width: 175, height: 16),
-            const SizedBox(height: 10),
+            const SkeletonBox(width: 168, height: 16),
+            const SizedBox(height: 8),
             for (var i = 0; i < 4; i++)
               const Padding(
                 padding: EdgeInsets.only(bottom: 8),
-                child: SkeletonCard(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SkeletonBox(width: 165, height: 14),
-                            SizedBox(height: 8),
-                            SkeletonBox(width: 210, height: 11),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          SkeletonBox(width: 84, height: 14),
-                          SizedBox(height: 6),
-                          SkeletonBox(width: 70, height: 11),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
+                child: _SkeletonListRowCard(),
               ),
           ],
         ),
@@ -648,34 +692,113 @@ class RbacAuditSkeleton extends StatelessWidget {
       liveRegion: true,
       child: ShimmerScope(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 108),
           children: [
-            SkeletonBox(width: double.infinity, height: 44, radius: t.radiusPill),
-            const SizedBox(height: 16),
-            const SkeletonBox(width: 140, height: 16),
-            const SizedBox(height: 10),
+            const _SkeletonFilterPillRow(count: 3),
+            const SizedBox(height: 12),
+            SkeletonBox(width: double.infinity, height: 48, radius: t.radiusMd),
+            const SizedBox(height: 12),
             for (var i = 0; i < 5; i++)
               const Padding(
                 padding: EdgeInsets.only(bottom: 8),
-                child: SkeletonCard(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  child: Row(
+                child: _SkeletonListRowCard(),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ProfileSkeleton extends StatelessWidget {
+  final String label;
+
+  const ProfileSkeleton({
+    super.key,
+    this.label = 'Memuat halaman profil dan ruang kerja...',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    return Semantics(
+      label: label,
+      liveRegion: true,
+      child: ShimmerScope(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 36),
+          children: [
+            _SkeletonHeroCard(
+              height: 204,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Expanded(
+                      SkeletonBox(width: 64, height: 64, radius: t.radiusPill),
+                      const SizedBox(width: 14),
+                      const Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            SkeletonBox(width: 150, height: 14),
+                            SkeletonBox(width: 168, height: 18),
                             SizedBox(height: 8),
-                            SkeletonBox(width: 220, height: 11),
+                            SkeletonBox(width: 120, height: 12),
+                            SizedBox(height: 8),
+                            SkeletonBox(width: 96, height: 20, radius: 9999),
                           ],
                         ),
                       ),
-                      SizedBox(width: 12),
-                      SkeletonBox(width: 68, height: 22, radius: 9999),
                     ],
                   ),
+                  const Spacer(),
+                  const Row(
+                    children: [
+                      Expanded(child: SkeletonBox(height: 46)),
+                      SizedBox(width: 8),
+                      Expanded(child: SkeletonBox(height: 46)),
+                      SizedBox(width: 8),
+                      Expanded(child: SkeletonBox(height: 46)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Row(
+              children: [
+                Expanded(
+                  child: SkeletonCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SkeletonBox(width: 84, height: 11),
+                        SizedBox(height: 8),
+                        SkeletonBox(width: 72, height: 22),
+                      ],
+                    ),
+                  ),
                 ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: SkeletonCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SkeletonBox(width: 84, height: 11),
+                        SizedBox(height: 8),
+                        SkeletonBox(width: 72, height: 22),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            for (var i = 0; i < 4; i++)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: _SkeletonListRowCard(),
               ),
           ],
         ),

@@ -1,13 +1,13 @@
 import { hasPermission } from '@ekalliptus/contracts';
 import {
   ArrowRight,
-  Banknote,
   Boxes,
-  Clock,
   FileSpreadsheet,
+  Fingerprint,
   LayoutDashboard,
   Search,
   ShieldCheck,
+  Store,
   Users,
   X,
 } from 'lucide-react';
@@ -50,15 +50,23 @@ export function CommandPalette({
         path: '/',
         icon: LayoutDashboard,
       },
+      {
+        id: 'nav-profile',
+        group: 'Navigasi',
+        label: 'Profil & Ruang Kerja',
+        hint: 'Identitas akun, ringkasan role, slip gaji & matriks hak akses',
+        path: '/profile',
+        icon: Users,
+      },
     ];
     if (hasPermission(perms, 'finance', 'view')) {
       list.push({
         id: 'nav-finance',
         group: 'Navigasi',
-        label: 'Keuangan & Akuntansi',
-        hint: 'Rekening kas, transaksi, hutang/piutang, invoice PDF',
+        label: 'Kasir / POS & Penjualan',
+        hint: 'Transaksi kasir, keranjang, diskon, PPN, struk & laporan',
         path: '/finance',
-        icon: Banknote,
+        icon: Store,
       });
     }
     if (hasPermission(perms, 'inventory', 'view')) {
@@ -76,9 +84,9 @@ export function CommandPalette({
         id: 'nav-attendance',
         group: 'Navigasi',
         label: 'Absensi & Geofence',
-        hint: 'Clock-in/out GPS + selfie, pengajuan cuti/sakit',
+        hint: 'Clock-in/out GPS + scan wajah, jam aktif & pengajuan izin',
         path: '/attendance',
-        icon: Clock,
+        icon: Fingerprint,
       });
     }
     if (hasPermission(perms, 'payroll', 'view')) {
@@ -106,7 +114,7 @@ export function CommandPalette({
         id: 'nav-audit',
         group: 'Kontrol',
         label: 'Audit Trail Immutable',
-        hint: 'Log aktivitas web, flutter, dan system beserta diff data',
+        hint: 'Log aktivitas web, android, dan system beserta diff data',
         path: '/audit',
         icon: ShieldCheck,
       });

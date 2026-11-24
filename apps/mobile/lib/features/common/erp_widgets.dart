@@ -159,9 +159,13 @@ class ErpBadge extends StatelessWidget {
         children: [
           Icon(icon, size: 13, color: fg),
           const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
+            ),
           ),
         ],
       ),
@@ -252,6 +256,7 @@ class ErpErrorCard extends StatelessWidget {
 Future<String?> showBarcodeScannerSheet(BuildContext context, {String title = 'Scan Barcode / QR'}) {
   return showModalBottomSheet<String>(
     context: context,
+    useRootNavigator: true,
     isScrollControlled: true,
     useSafeArea: true,
     builder: (ctx) {
@@ -296,4 +301,391 @@ Future<String?> showBarcodeScannerSheet(BuildContext context, {String title = 'S
       );
     },
   );
+}
+
+/// Kartu ringkasan utama dengan gradien Eucalyptus kontras tinggi (Light & Dark).
+class ErpHeroCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  const ErpHeroCard({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.all(20),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(t.radiusXl),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? const [Color(0xFF0F2F2B), Color(0xFF064E3B)]
+              : const [Color(0xFF0F766E), Color(0xFF0B4F4A)],
+        ),
+        border: Border.all(
+          color: (isDark ? const Color(0xFF34D399) : const Color(0xFF14B8A6))
+              .withValues(alpha: 0.35),
+          width: 1,
+        ),
+        boxShadow: isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: const Color(0xFF0F766E).withValues(alpha: 0.16),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+      ),
+      child: child,
+    );
+  }
+}
+
+/// Tombol akses cepat kompak berbentuk ubin dengan ikon dan label 1 baris.
+class ErpQuickActionTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Color? iconColor;
+  final Color? badgeBackground;
+
+  const ErpQuickActionTile({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.iconColor,
+    this.badgeBackground,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(t.radiusLg),
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 74),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: badgeBackground ?? t.accentSoft,
+                    borderRadius: BorderRadius.circular(t.radiusMd),
+                  ),
+                  child: Icon(icon, size: 20, color: iconColor ?? t.accent),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: t.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Judul bagian konsisten dengan tombol aksi opsional di sisi kanan.
+class ErpSectionHeader extends StatelessWidget {
+  final String title;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  const ErpSectionHeader({
+    super.key,
+    required this.title,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: Theme.of(context).textTheme.titleMedium,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (actionLabel != null && onAction != null)
+          TextButton(
+            onPressed: onAction,
+            style: TextButton.styleFrom(
+              foregroundColor: t.accent,
+              minimumSize: const Size(44, 44),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+            ),
+            child: Text(
+              actionLabel!,
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Opsi filter berbentuk pill untuk [ErpFilterPillBar].
+class ErpFilterPillOption<T> {
+  final T value;
+  final String label;
+
+  const ErpFilterPillOption({
+    required this.value,
+    required this.label,
+  });
+}
+
+/// Bar filter horizontal bergaya pill dengan target sentuh >= 44px.
+class ErpFilterPillBar<T> extends StatelessWidget {
+  final List<ErpFilterPillOption<T>> options;
+  final T selected;
+  final ValueChanged<T> onSelected;
+
+  const ErpFilterPillBar({
+    super.key,
+    required this.options,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    return SizedBox(
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: options.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (ctx, i) {
+          final opt = options[i];
+          final active = opt.value == selected;
+          return Material(
+            color: active ? t.accent : t.surface,
+            shape: StadiumBorder(
+              side: BorderSide(
+                color: active ? t.accent : t.border,
+                width: 1,
+              ),
+            ),
+            child: InkWell(
+              customBorder: const StadiumBorder(),
+              onTap: () => onSelected(opt.value),
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 44),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                alignment: Alignment.center,
+                child: Text(
+                  opt.label,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: active ? t.onAccent : t.textSecondary,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Kartu baris list 3-zona: ikon kiri, judul + subjudul tengah, widget kanan.
+class ErpListRowCard extends StatelessWidget {
+  final IconData leadingIcon;
+  final String title;
+  final String subtitle;
+  final Color? leadingColor;
+  final Color? leadingBackground;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+
+  const ErpListRowCard({
+    super.key,
+    required this.leadingIcon,
+    required this.title,
+    required this.subtitle,
+    this.leadingColor,
+    this.leadingBackground,
+    this.trailing,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(t.radiusLg),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: leadingBackground ?? t.accentSoft,
+                  borderRadius: BorderRadius.circular(t.radiusMd),
+                ),
+                child: Icon(leadingIcon, size: 20, color: leadingColor ?? t.accent),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: t.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              if (trailing != null) ...[
+                const SizedBox(width: 10),
+                trailing!,
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Bingkai standar modal bottom sheet yang aman terhadap keyboard & SafeArea.
+class ErpBottomSheetFrame extends StatelessWidget {
+  final String title;
+  final Widget child;
+  final String? subtitle;
+
+  const ErpBottomSheetFrame({
+    super.key,
+    required this.title,
+    required this.child,
+    this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = EucalyptusTokens.of(context);
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
+    return Material(
+      color: t.surface,
+      borderRadius: BorderRadius.vertical(top: Radius.circular(t.radiusXl)),
+      clipBehavior: Clip.antiAlias,
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(20, 12, 20, 24 + bottomInset + bottomSafe),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: t.borderStrong,
+                  borderRadius: BorderRadius.circular(t.radiusPill),
+                ),
+              ),
+            ),
+            Text(title, style: Theme.of(context).textTheme.titleLarge),
+            if (subtitle != null && subtitle!.trim().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),
+            ],
+            const SizedBox(height: 16),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Dialog konfirmasi terstandar untuk aksi destruktif maupun persetujuan sensitif.
+Future<bool> showErpConfirmDialog(
+  BuildContext context, {
+  required String title,
+  required String message,
+  required String confirmLabel,
+  bool destructive = false,
+}) async {
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: Text(message),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Batal'),
+        ),
+        FilledButton(
+          style: destructive
+              ? FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFB91C1C),
+                  foregroundColor: Colors.white,
+                )
+              : null,
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: Text(confirmLabel),
+        ),
+      ],
+    ),
+  );
+  return result ?? false;
 }

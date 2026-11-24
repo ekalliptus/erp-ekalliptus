@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -55,6 +56,7 @@ class _ThemeRevealHostState extends State<ThemeRevealHost> with SingleTickerProv
   ui.Image? _snapshot;
   Offset _origin = Offset.zero;
   Color _ringColor = EucalyptusTokens.light.accent;
+  int _toggleSeq = 0;
 
   @override
   void initState() {
@@ -65,7 +67,7 @@ class _ThemeRevealHostState extends State<ThemeRevealHost> with SingleTickerProv
       curve: const Cubic(0.23, 1, 0.32, 1),
     );
     _controller.addStatusListener((status) {
-      if (status == AnimationStatus.completed || status == AnimationStatus.dismissed) {
+      if (status == AnimationStatus.completed) {
         _clearSnapshot();
       }
     });
@@ -97,6 +99,8 @@ class _ThemeRevealHostState extends State<ThemeRevealHost> with SingleTickerProv
     required VoidCallback onCommitTheme,
   }) {
     if (!mounted) return;
+    final seq = ++_toggleSeq;
+
     if (MediaQuery.disableAnimationsOf(context)) {
       _controller.stop();
       _clearSnapshot();
@@ -104,51 +108,147 @@ class _ThemeRevealHostState extends State<ThemeRevealHost> with SingleTickerProv
       return;
     }
 
+    final isAnimatingOrHasSnapshot = _controller.isAnimating || _snapshot != null;
+    final renderObj = _boundaryKey.currentContext?.findRenderObject();
+    final canSyncCaptureNow = !isAnimatingOrHasSnapshot &&
+        renderObj is RenderRepaintBoundary &&
+        renderObj.hasSize &&
+        !renderObj.debugNeedsPaint;
+
+    if (canSyncCaptureNow) {
+      ui.Image? captured;
+      try {
+        final dpr = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.5);
+        captured = renderObj.toImageSync(pixelRatio: dpr);
+      } catch (_) {
+        captured = null;
+      }
+      _finishCaptureAndAnimate(
+        seq: seq,
+        captured: captured,
+        origin: origin,
+        onCommitTheme: onCommitTheme,
+      );
+      return;
+    }
+
+    unawaited(
+      _performRevealToggleAsync(
+        seq: seq,
+        origin: origin,
+        onCommitTheme: onCommitTheme,
+      ),
+    );
+  }
+
+  Future<void> _performRevealToggleAsync({
+    required int seq,
+    required Offset origin,
+    required VoidCallback onCommitTheme,
+  }) async {
     if (_controller.isAnimating) {
       _controller.stop();
     }
-    final previous = _snapshot;
-    _snapshot = null;
-    _disposeImage(previous);
-
-    ui.Image? captured;
-    try {
-      final renderObj = _boundaryKey.currentContext?.findRenderObject();
-      if (renderObj is RenderRepaintBoundary &&
-          renderObj.hasSize &&
-          !renderObj.debugNeedsPaint) {
-        final dpr = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.5);
-        captured = renderObj.toImageSync(pixelRatio: dpr);
+    if (_snapshot != null) {
+      final old = _snapshot;
+      if (mounted) {
+        setState(() => _snapshot = null);
+      } else {
+        _snapshot = null;
       }
-    } catch (_) {
-      captured = null;
+      _disposeImage(old);
+      WidgetsBinding.instance.scheduleFrame();
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || seq != _toggleSeq) return;
     }
 
+    ui.Image? captured;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final renderObj = _boundaryKey.currentContext?.findRenderObject();
+      if (renderObj is! RenderRepaintBoundary || !renderObj.hasSize) break;
+      if (!renderObj.debugNeedsPaint) {
+        try {
+          final dpr = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.5);
+          captured = renderObj.toImageSync(pixelRatio: dpr);
+        } catch (_) {
+          captured = null;
+        }
+        break;
+      }
+      WidgetsBinding.instance.scheduleFrame();
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || seq != _toggleSeq) return;
+    }
+
+    if (captured == null) {
+      final renderObj = _boundaryKey.currentContext?.findRenderObject();
+      if (renderObj is RenderRepaintBoundary && renderObj.hasSize) {
+        try {
+          final dpr = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.5);
+          if (!renderObj.debugNeedsPaint) {
+            captured = renderObj.toImageSync(pixelRatio: dpr);
+          } else {
+            captured = await renderObj.toImage(pixelRatio: dpr);
+          }
+        } catch (_) {
+          captured = null;
+        }
+      }
+    }
+
+    if (!mounted || seq != _toggleSeq) {
+      _disposeImage(captured);
+      return;
+    }
+
+    _finishCaptureAndAnimate(
+      seq: seq,
+      captured: captured,
+      origin: origin,
+      onCommitTheme: onCommitTheme,
+    );
+  }
+
+  void _finishCaptureAndAnimate({
+    required int seq,
+    required ui.Image? captured,
+    required Offset origin,
+    required VoidCallback onCommitTheme,
+  }) {
+    if (!mounted || seq != _toggleSeq) {
+      _disposeImage(captured);
+      return;
+    }
     if (captured == null) {
       onCommitTheme();
       return;
     }
 
+    final hostBox = context.findRenderObject() as RenderBox?;
+    final localOrigin =
+        (hostBox != null && hostBox.hasSize) ? hostBox.globalToLocal(origin) : origin;
+
     final isCurrentlyDark = Theme.of(context).brightness == Brightness.dark;
     final nextTokens = isCurrentlyDark ? EucalyptusTokens.light : EucalyptusTokens.dark;
 
+    _controller.reset();
     setState(() {
       _snapshot = captured;
-      _origin = origin;
+      _origin = localOrigin;
       _ringColor = nextTokens.accent;
     });
-    _controller.value = 0.0;
 
     onCommitTheme();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _snapshot == null) return;
+      if (!mounted || seq != _toggleSeq || _snapshot == null) return;
       _controller.forward(from: 0.0);
     });
   }
 
   @override
   void dispose() {
+    _toggleSeq++;
     _controller.dispose();
     final old = _snapshot;
     _snapshot = null;
@@ -175,27 +275,14 @@ class _ThemeRevealHostState extends State<ThemeRevealHost> with SingleTickerProv
                     final img = _snapshot;
                     if (img == null) return const SizedBox.shrink();
                     final progress = _curved.value.clamp(0.0, 1.0);
-                    return Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ClipPath(
-                          clipper: _InvertedCircleRevealClipper(
-                            center: _origin,
-                            progress: progress,
-                          ),
-                          child: RawImage(
-                            image: img,
-                            fit: BoxFit.fill,
-                          ),
-                        ),
-                        CustomPaint(
-                          painter: _RevealRingPainter(
-                            center: _origin,
-                            progress: progress,
-                            color: _ringColor,
-                          ),
-                        ),
-                      ],
+                    return CustomPaint(
+                      key: const ValueKey<String>('theme-reveal-overlay'),
+                      painter: _ThemeRevealOverlayPainter(
+                        snapshot: img,
+                        center: _origin,
+                        progress: progress,
+                        ringColor: _ringColor,
+                      ),
                     );
                   },
                 ),
@@ -213,58 +300,61 @@ double _maxRevealRadius(Size size, Offset center) {
   return math.sqrt(dx * dx + dy * dy);
 }
 
-class _InvertedCircleRevealClipper extends CustomClipper<Path> {
+class _ThemeRevealOverlayPainter extends CustomPainter {
+  final ui.Image snapshot;
   final Offset center;
   final double progress;
+  final Color ringColor;
 
-  const _InvertedCircleRevealClipper({
+  const _ThemeRevealOverlayPainter({
+    required this.snapshot,
     required this.center,
     required this.progress,
-  });
-
-  @override
-  Path getClip(Size size) {
-    final radius = _maxRevealRadius(size, center) * progress;
-    return Path()
-      ..fillType = PathFillType.evenOdd
-      ..addRect(Offset.zero & size)
-      ..addOval(Rect.fromCircle(center: center, radius: radius));
-  }
-
-  @override
-  bool shouldReclip(_InvertedCircleRevealClipper oldClipper) {
-    return oldClipper.progress != progress || oldClipper.center != center;
-  }
-}
-
-class _RevealRingPainter extends CustomPainter {
-  final Offset center;
-  final double progress;
-  final Color color;
-
-  const _RevealRingPainter({
-    required this.center,
-    required this.progress,
-    required this.color,
+    required this.ringColor,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (progress <= 0.01 || progress >= 0.99) return;
+    final dstRect = Offset.zero & size;
+    final srcRect = Rect.fromLTWH(
+      0,
+      0,
+      snapshot.width.toDouble(),
+      snapshot.height.toDouble(),
+    );
+    final imagePaint = Paint()..filterQuality = FilterQuality.medium;
     final radius = _maxRevealRadius(size, center) * progress;
-    final opacity = (1.0 - progress).clamp(0.0, 1.0) * 0.42;
-    final paint = Paint()
-      ..color = color.withValues(alpha: opacity)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-    canvas.drawCircle(center, radius, paint);
+
+    if (radius <= 0.5) {
+      canvas.drawImageRect(snapshot, srcRect, dstRect, imagePaint);
+      return;
+    }
+
+    canvas.save();
+    final path = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(dstRect)
+      ..addOval(Rect.fromCircle(center: center, radius: radius));
+    canvas.clipPath(path);
+    canvas.drawImageRect(snapshot, srcRect, dstRect, imagePaint);
+    canvas.restore();
+
+    if (progress > 0.01 && progress < 0.99) {
+      final opacity = (1.0 - progress).clamp(0.0, 1.0) * 0.42;
+      final ringPaint = Paint()
+        ..color = ringColor.withValues(alpha: opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5;
+      canvas.drawCircle(center, radius, ringPaint);
+    }
   }
 
   @override
-  bool shouldRepaint(_RevealRingPainter oldDelegate) {
-    return oldDelegate.progress != progress ||
+  bool shouldRepaint(_ThemeRevealOverlayPainter oldDelegate) {
+    return oldDelegate.snapshot != snapshot ||
+        oldDelegate.progress != progress ||
         oldDelegate.center != center ||
-        oldDelegate.color != color;
+        oldDelegate.ringColor != ringColor;
   }
 }
 

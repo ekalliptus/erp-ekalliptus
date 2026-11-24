@@ -8,7 +8,7 @@ import {
 } from '@ekalliptus/db';
 import { createRealtime } from '@neon/realtime/server';
 import { drizzleAdapter } from '@neon/realtime-drizzle';
-import { desc, eq, lte } from 'drizzle-orm';
+import { and, desc, eq, lte, sql } from 'drizzle-orm';
 import { getDb } from '../db.js';
 
 let realtimeInstance: ReturnType<typeof createRealtime> | null = null;
@@ -97,8 +97,8 @@ export function inventoryStocksLiveQuery() {
     .from(inventory_stocks);
 }
 
-export function attendancesLiveQuery() {
-  return getDb()
+export function attendancesLiveQuery(employeeId?: string) {
+  const base = getDb()
     .select({
       id: attendances.id,
       employee_id: attendances.employee_id,
@@ -111,12 +111,22 @@ export function attendancesLiveQuery() {
       overtime_minutes: attendances.overtime_minutes,
       approval_status: attendances.approval_status,
     })
-    .from(attendances)
-    .orderBy(desc(attendances.attendance_date))
-    .limit(100);
+    .from(attendances);
+  const filtered = employeeId ? base.where(eq(attendances.employee_id, employeeId)) : base;
+  return filtered.orderBy(desc(attendances.attendance_date)).limit(100);
 }
 
-export function erpEventsLiveQuery(channel: 'erp:finance' | 'erp:inventory' | 'erp:attendance') {
+export function erpEventsLiveQuery(
+  channel: 'erp:finance' | 'erp:inventory' | 'erp:attendance',
+  employeeId?: string,
+) {
+  const condition =
+    channel === 'erp:attendance' && employeeId
+      ? and(
+          eq(erp_events.channel, channel),
+          sql`${erp_events.payload}->>'employee_id' = ${employeeId}`,
+        )
+      : eq(erp_events.channel, channel);
   return getDb()
     .select({
       id: erp_events.id,
@@ -126,7 +136,7 @@ export function erpEventsLiveQuery(channel: 'erp:finance' | 'erp:inventory' | 'e
       created_at: erp_events.created_at,
     })
     .from(erp_events)
-    .where(eq(erp_events.channel, channel))
+    .where(condition)
     .orderBy(desc(erp_events.id))
     .limit(30);
 }

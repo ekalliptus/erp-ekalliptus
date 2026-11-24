@@ -46,10 +46,17 @@ export async function createPresignedUploadUrl(params: {
 export async function createPresignedDownloadUrl(params: {
   key: string;
   expiresIn?: number;
+  filename?: string;
+  contentType?: string;
 }): Promise<string> {
+  const safeDisposition = params.filename
+    ? `attachment; filename="${params.filename.replace(/"/g, '')}"`
+    : undefined;
   const cmd = new GetObjectCommand({
     Bucket: getBucketName(),
     Key: params.key,
+    ...(safeDisposition ? { ResponseContentDisposition: safeDisposition } : {}),
+    ...(params.contentType ? { ResponseContentType: params.contentType } : {}),
   });
   return getSignedUrl(getS3Client(), cmd, { expiresIn: params.expiresIn ?? 3600 });
 }

@@ -11,8 +11,11 @@ class AppConfig {
 
   static const String authOrigin = String.fromEnvironment(
     'AUTH_ORIGIN',
-    defaultValue: 'http://localhost:5173',
+    defaultValue: 'https://my.ekalliptus.com',
   );
 
   static const String supportEmail = 'alul@ekalliptus.com';
+  static const String appVersion = '1.3.3';
+  static const int appBuildNumber = 7;
+  static const String defaultUpdateUrl = 'https://my.ekalliptus.com';
 }

@@ -1,4 +1,13 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { flushSync } from 'react-dom';
 
 export type ThemeMode = 'light' | 'dark';
@@ -32,13 +41,11 @@ function readInitialTheme(): ThemeMode {
   return 'light';
 }
 
-function applyDomTheme(next: ThemeMode) {
-  const root = document.documentElement;
-  if (next === 'dark') {
-    root.classList.add('dark');
-  } else {
-    root.classList.remove('dark');
-  }
+function applyDomThemeClass(next: ThemeMode) {
+  document.documentElement.classList.toggle('dark', next === 'dark');
+}
+
+function persistTheme(next: ThemeMode) {
   try {
     localStorage.setItem('ep-theme', next);
   } catch {
@@ -48,63 +55,91 @@ function applyDomTheme(next: ThemeMode) {
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeMode>(readInitialTheme);
+  const themeRef = useRef<ThemeMode>(theme);
+  const pendingPersistRef = useRef<ThemeMode | null>(null);
+  const activeAnimationRef = useRef<Animation | null>(null);
   const fallbackTimerRef = useRef<number | null>(null);
+  const transitionSeqRef = useRef(0);
+
+  themeRef.current = theme;
 
   useEffect(() => {
-    applyDomTheme(theme);
-  }, [theme]);
+    const flushPendingPersist = () => {
+      if (pendingPersistRef.current !== null) {
+        persistTheme(pendingPersistRef.current);
+        pendingPersistRef.current = null;
+      }
+    };
 
-  useEffect(() => {
+    window.addEventListener('pagehide', flushPendingPersist);
     return () => {
+      window.removeEventListener('pagehide', flushPendingPersist);
+      flushPendingPersist();
       if (fallbackTimerRef.current !== null) {
         window.clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
+      try {
+        activeAnimationRef.current?.cancel();
+      } catch {
+        // Ignore animation cancellation errors on teardown.
+      }
+      activeAnimationRef.current = null;
+      if (typeof document !== 'undefined') {
+        document.documentElement.classList.remove('ep-theme-switching');
       }
     };
   }, []);
 
-  function commitThemeWithTransition(next: ThemeMode, origin?: ThemeOrigin) {
+  const commitThemeWithTransition = useCallback((next: ThemeMode, origin?: ThemeOrigin) => {
+    if (next === themeRef.current) return;
+    themeRef.current = next;
+
     if (typeof document === 'undefined') {
       setThemeState(next);
       return;
     }
 
+    const root = document.documentElement;
+    const seq = ++transitionSeqRef.current;
     const doc = document as Document & ViewTransitionDoc;
-    const reduceMotion =
-      typeof window !== 'undefined' &&
-      window.matchMedia &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    const vw = Math.max(window.innerWidth, document.documentElement.clientWidth);
+    const vh = Math.max(
+      window.innerHeight,
+      document.documentElement.clientHeight,
+      window.visualViewport?.height ?? 0,
+    );
+    const x = Math.round(origin?.x ?? vw - 40);
+    const y = Math.round(origin?.y ?? 32);
+    const baseRadius = Math.hypot(
+      Math.max(x, vw - x),
+      Math.max(y, vh - y),
+    );
+    const maxRadius = Math.ceil(baseRadius * 1.1 + 48);
 
     if (typeof doc.startViewTransition === 'function') {
       try {
+        try {
+          activeAnimationRef.current?.cancel();
+        } catch {
+          // Ignore animation cancellation errors on aborted transitions.
+        }
+        activeAnimationRef.current = null;
+        pendingPersistRef.current = next;
+
         const transition = doc.startViewTransition(() => {
-          applyDomTheme(next);
+          root.classList.add('ep-theme-switching');
+          applyDomThemeClass(next);
           flushSync(() => {
             setThemeState(next);
           });
         });
 
-        const x = origin?.x ?? window.innerWidth - 40;
-        const y = origin?.y ?? 32;
-        const maxRadius = Math.hypot(
-          Math.max(x, window.innerWidth - x),
-          Math.max(y, window.innerHeight - y),
-        );
-
         void transition.ready
           .then(() => {
-            if (reduceMotion) {
-              document.documentElement.animate(
-                { opacity: [0, 1] },
-                {
-                  duration: 180,
-                  easing: 'ease-out',
-                  pseudoElement: '::view-transition-new(root)',
-                },
-              );
-              return;
-            }
-
-            document.documentElement.animate(
+            if (transitionSeqRef.current !== seq) return;
+            activeAnimationRef.current = document.documentElement.animate(
               {
                 clipPath: [
                   `circle(0px at ${x}px ${y}px)`,
@@ -112,8 +147,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
                 ],
               },
               {
-                duration: 460,
-                easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
+                duration: 420,
+                easing: 'cubic-bezier(0.32, 0, 0.68, 1)',
+                fill: 'both',
                 pseudoElement: '::view-transition-new(root)',
               },
             );
@@ -121,36 +157,68 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           .catch(() => {
             // Ignore aborted view transitions on rapid repeated clicks.
           });
+
+        void transition.finished
+          .catch(() => {
+            // Ignore aborted view transitions on rapid repeated clicks.
+          })
+          .finally(() => {
+            if (transitionSeqRef.current === seq) {
+              root.classList.remove('ep-theme-switching');
+              activeAnimationRef.current = null;
+              if (pendingPersistRef.current !== null) {
+                persistTheme(pendingPersistRef.current);
+                pendingPersistRef.current = null;
+              }
+            }
+          });
         return;
       } catch {
+        if (transitionSeqRef.current === seq) {
+          root.classList.remove('ep-theme-switching');
+          activeAnimationRef.current = null;
+        }
         // Fall through to named-property CSS transition fallback.
       }
     }
 
-    const root = document.documentElement;
+    root.classList.remove('ep-theme-switching');
     if (fallbackTimerRef.current !== null) {
       window.clearTimeout(fallbackTimerRef.current);
     }
     root.classList.add('ep-theme-fallback');
-    applyDomTheme(next);
+    applyDomThemeClass(next);
+    persistTheme(next);
+    pendingPersistRef.current = null;
     setThemeState(next);
     fallbackTimerRef.current = window.setTimeout(() => {
       root.classList.remove('ep-theme-fallback');
       fallbackTimerRef.current = null;
     }, 280);
-  }
+  }, []);
 
-  const setTheme = (next: ThemeMode, origin?: ThemeOrigin) => {
-    commitThemeWithTransition(next, origin);
-  };
+  const setTheme = useCallback(
+    (next: ThemeMode, origin?: ThemeOrigin) => {
+      commitThemeWithTransition(next, origin);
+    },
+    [commitThemeWithTransition],
+  );
 
-  const toggleTheme = (origin?: ThemeOrigin) => {
-    const next: ThemeMode = theme === 'dark' ? 'light' : 'dark';
-    commitThemeWithTransition(next, origin);
-  };
+  const toggleTheme = useCallback(
+    (origin?: ThemeOrigin) => {
+      const next: ThemeMode = themeRef.current === 'dark' ? 'light' : 'dark';
+      commitThemeWithTransition(next, origin);
+    },
+    [commitThemeWithTransition],
+  );
+
+  const contextValue = useMemo(
+    () => ({ theme, setTheme, toggleTheme }),
+    [theme, setTheme, toggleTheme],
+  );
 
   return (
-    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
+    <ThemeContext.Provider value={contextValue}>
       {children}
     </ThemeContext.Provider>
   );

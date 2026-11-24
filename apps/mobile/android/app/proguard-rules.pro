@@ -1,0 +1,8 @@
+-keep class com.ekalliptus.ekalliptus_erp_mobile.** { *; }
+-dontwarn com.google.errorprone.annotations.**
+-keep class org.tensorflow.lite.** { *; }
+-keep class com.google.android.gms.tflite.** { *; }
+-keep class com.google.mlkit.** { *; }
+-dontwarn org.tensorflow.lite.**
+-dontwarn com.google.android.gms.tflite.**
+-dontwarn javax.annotation.**

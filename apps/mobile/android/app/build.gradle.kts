@@ -32,11 +32,42 @@ android {
         versionName = flutter.versionName
     }
 
+    androidResources {
+        localeFilters += listOf("id", "in", "en")
+    }
+
+    val targetPlatformProp = project.findProperty("target-platform")?.toString()
+    val excludeX86 =
+        targetPlatformProp != null &&
+            !targetPlatformProp.contains("android-x64") &&
+            !targetPlatformProp.contains("android-x86")
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            if (excludeX86) {
+                excludes += setOf("lib/x86_64/**", "lib/x86/**", "**/x86_64/*.so", "**/x86/*.so")
+            }
+        }
+        resources {
+            excludes += setOf(
+                "DebugProbesKt.bin",
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+            )
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
         }
     }
 }
@@ -49,4 +80,13 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation("androidx.camera:camera-core:1.4.2")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
+    implementation("com.google.android.gms:play-services-mlkit-face-detection:17.1.0")
+    implementation("com.google.android.gms:play-services-tflite-java:16.5.0")
 }

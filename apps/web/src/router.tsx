@@ -6,9 +6,10 @@ import {
   Outlet,
   useNavigate,
   useRouterState,
+  type ErrorComponentProps,
 } from '@tanstack/react-router';
-import { lazy, Suspense, useEffect, type ReactNode } from 'react';
-import { AppShell } from './components/AppShell.tsx';
+import { AlertTriangle, Home, RefreshCw } from 'lucide-react';
+import { Suspense, useEffect, type ReactNode } from 'react';
 import {
   AppShellBootSkeleton,
   ModulePageSkeleton,
@@ -17,29 +18,40 @@ import {
 import { ErrorState } from './components/StateViews.tsx';
 import { ApiError, erpApi, type MeResponse } from './lib/api.ts';
 import { authClient, clearAccessTokenCache } from './lib/auth.ts';
-import { enableWebNotifications } from './lib/notifications.ts';
+import {
+  isChunkLoadError,
+  lazyWithRetry,
+  tryReloadOnceForStaleChunk,
+} from './lib/lazyWithRetry.ts';
 import { LoginPage } from './routes/LoginPage.tsx';
 
-const DashboardPage = lazy(() =>
+const AppShell = lazyWithRetry(() =>
+  import('./components/AppShell.tsx').then((m) => ({ default: m.AppShell })),
+);
+
+const DashboardPage = lazyWithRetry(() =>
   import('./routes/DashboardPage.tsx').then((m) => ({ default: m.DashboardPage })),
 );
-const FinancePage = lazy(() =>
+const FinancePage = lazyWithRetry(() =>
   import('./routes/FinancePage.tsx').then((m) => ({ default: m.FinancePage })),
 );
-const InventoryPage = lazy(() =>
+const InventoryPage = lazyWithRetry(() =>
   import('./routes/InventoryPage.tsx').then((m) => ({ default: m.InventoryPage })),
 );
-const AttendancePage = lazy(() =>
+const AttendancePage = lazyWithRetry(() =>
   import('./routes/AttendancePage.tsx').then((m) => ({ default: m.AttendancePage })),
 );
-const PayrollPage = lazy(() =>
+const PayrollPage = lazyWithRetry(() =>
   import('./routes/PayrollPage.tsx').then((m) => ({ default: m.PayrollPage })),
 );
-const RbacPage = lazy(() =>
+const RbacPage = lazyWithRetry(() =>
   import('./routes/RbacPage.tsx').then((m) => ({ default: m.RbacPage })),
 );
-const AuditPage = lazy(() =>
+const AuditPage = lazyWithRetry(() =>
   import('./routes/AuditPage.tsx').then((m) => ({ default: m.AuditPage })),
+);
+const ProfilePage = lazyWithRetry(() =>
+  import('./routes/ProfilePage.tsx').then((m) => ({ default: m.ProfilePage })),
 );
 
 function AuthenticatedFrame({
@@ -114,7 +126,9 @@ function RootComponent() {
   useEffect(() => {
     if (!meQuery.data) return;
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      void enableWebNotifications().catch(() => null);
+      void import('./lib/notifications.ts')
+        .then((m) => m.enableWebNotifications())
+        .catch(() => null);
     }
   }, [meQuery.data]);
 
@@ -180,13 +194,15 @@ function RootComponent() {
   }
 
   return (
-    <AppShell
-      me={meQuery.data}
-      onNavigate={(to) => void navigate({ to: to as '/' })}
-      onSignedOut={() => void navigate({ to: '/login', replace: true })}
-    >
-      <Outlet />
-    </AppShell>
+    <Suspense fallback={<AppShellBootSkeleton label="Memuat ruang kerja MyEkalliptus..." />}>
+      <AppShell
+        me={meQuery.data}
+        onNavigate={(to) => void navigate({ to: to as '/' })}
+        onSignedOut={() => void navigate({ to: '/login', replace: true })}
+      >
+        <Outlet />
+      </AppShell>
+    </Suspense>
   );
 }
 
@@ -277,6 +293,17 @@ const auditRoute = createRoute({
   ),
 });
 
+const profileRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/profile',
+  component: () => (
+    <AuthenticatedFrame
+      skeletonVariant="profile"
+      renderPage={(me) => <ProfilePage me={me} />}
+    />
+  ),
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
   indexRoute,
@@ -286,10 +313,99 @@ const routeTree = rootRoute.addChildren([
   payrollRoute,
   rbacRoute,
   auditRoute,
+  profileRoute,
 ]);
+
+function RouteErrorFallback({ error, reset }: ErrorComponentProps) {
+  const chunkErr = isChunkLoadError(error);
+  const errorMessage =
+    error instanceof Error ? error.message : 'Terjadi kesalahan saat memuat halaman.';
+
+  useEffect(() => {
+    if (chunkErr) {
+      tryReloadOnceForStaleChunk();
+    }
+  }, [chunkErr]);
+
+  return (
+    <div className="mx-auto my-12 w-full max-w-lg px-4">
+      <div
+        role="alert"
+        className="flex flex-col items-center gap-4 rounded-xl border border-border bg-surface p-6 text-center shadow-sm"
+      >
+        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-danger-soft text-[#991B1B] dark:text-[#FCA5A5]">
+          <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+        </div>
+        <div className="space-y-1.5">
+          <h2 className="font-display text-base font-bold text-text-primary">
+            {chunkErr ? 'Pembaruan Aplikasi Tersedia' : 'Terjadi Gangguan pada Halaman'}
+          </h2>
+          <p className="text-xs leading-relaxed text-text-secondary">
+            {chunkErr
+              ? 'Versi aplikasi di server telah diperbarui sehingga modul halaman lama tidak lagi tersedia. Muat ulang halaman untuk mengambil versi terbaru.'
+              : errorMessage}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-4 text-xs font-semibold text-on-accent hover:bg-accent-hover"
+          >
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+            Muat Ulang Halaman
+          </button>
+          {!chunkErr ? (
+            <button
+              type="button"
+              onClick={() => reset()}
+              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-border-strong bg-surface-subtle px-4 text-xs font-semibold text-text-primary hover:bg-surface"
+            >
+              Coba Lagi
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RouteNotFoundFallback() {
+  const navigate = useNavigate();
+
+  return (
+    <div className="mx-auto my-12 w-full max-w-lg px-4">
+      <div className="flex flex-col items-center gap-4 rounded-xl border border-border bg-surface p-6 text-center shadow-sm">
+        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-accent-soft text-[#115E59] dark:text-[#34D399]">
+          <Home className="h-5 w-5" aria-hidden="true" />
+        </div>
+        <div className="space-y-1.5">
+          <h2 className="font-display text-base font-bold text-text-primary">
+            Halaman Tidak Ditemukan
+          </h2>
+          <p className="text-xs leading-relaxed text-text-secondary">
+            Tautan halaman yang Anda buka tidak tersedia atau telah dipindahkan.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void navigate({ to: '/', replace: true })}
+          className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-4 text-xs font-semibold text-on-accent hover:bg-accent-hover"
+        >
+          <Home className="h-3.5 w-3.5" aria-hidden="true" />
+          Kembali ke Dashboard
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export const router = createRouter({
   routeTree,
+  defaultPreload: 'intent',
+  defaultPreloadStaleTime: 30_000,
+  defaultErrorComponent: RouteErrorFallback,
+  defaultNotFoundComponent: RouteNotFoundFallback,
 });
 
 declare module '@tanstack/react-router' {

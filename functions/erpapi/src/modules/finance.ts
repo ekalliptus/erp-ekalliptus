@@ -2,8 +2,10 @@ import {
   createAccountSchema,
   createCategorySchema,
   createObligationSchema,
+  createPosSaleSchema,
   createTransactionSchema,
   payObligationSchema,
+  voidPosSaleSchema,
 } from '@ekalliptus/contracts';
 import {
   employees,
@@ -11,13 +13,20 @@ import {
   finance_categories,
   finance_obligations,
   finance_transactions,
+  inventory_items,
+  inventory_stocks,
+  pos_sale_items,
+  pos_sales,
+  stock_movements,
+  warehouses,
 } from '@ekalliptus/db';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import crypto from 'node:crypto';
 import { getDb, jsonSafe, txidExpr } from '../db.js';
 import { emitErpEvent, writeAuditLog } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/rbac.js';
-import { generateInvoicePdf } from '../services/pdf.js';
+import { generateInvoicePdf, generatePosReceiptPdf } from '../services/pdf.js';
 import { formatRupiah, notifyUsersInTx, resolveModuleViewers } from '../services/notify.js';
 import { createPresignedDownloadUrl, uploadObject } from '../services/storage.js';
 import type { AppEnv } from '../types.js';
@@ -769,6 +778,798 @@ router.post('/obligations/:id/pay', requirePermission('finance', 'approve'), asy
     });
 
     return c.json(jsonSafe(out));
+  } catch (err) {
+    if (err instanceof HttpStatusError) {
+      return c.json({ error: err.message }, err.status);
+    }
+    throw err;
+  }
+});
+
+function jakartaYmd(date: Date): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
+}
+
+function buildPosSaleNumber(now: Date): string {
+  const compact = jakartaYmd(now).slice(2).replace(/-/g, '');
+  const suffix = crypto.randomBytes(2).toString('hex').toUpperCase();
+  return `POS-${compact}-${suffix}`;
+}
+
+function computePosDiscount(
+  subtotal: bigint,
+  type: 'none' | 'amount' | 'percent',
+  rawVal: bigint | number,
+): bigint {
+  const val = BigInt(rawVal ?? 0);
+  if (type === 'none') return 0n;
+  if (type === 'percent') {
+    if (val < 0n || val > 100n) {
+      throw new HttpStatusError(400, 'Diskon persentase harus antara 0 sampai 100%.');
+    }
+    return (subtotal * val) / 100n;
+  }
+  if (val < 0n || val > subtotal) {
+    throw new HttpStatusError(400, 'Diskon nominal tidak boleh melebihi subtotal.');
+  }
+  return val;
+}
+
+router.get('/pos/catalog', requirePermission('finance', 'view'), async (c) => {
+  const db = getDb();
+  const [whRows, accRows, itemRows, stockRows] = await Promise.all([
+    db.select().from(warehouses).orderBy(desc(warehouses.is_default), warehouses.name),
+    db
+      .select()
+      .from(finance_accounts)
+      .where(eq(finance_accounts.is_active, true))
+      .orderBy(finance_accounts.name),
+    db
+      .select()
+      .from(inventory_items)
+      .where(eq(inventory_items.is_active, true))
+      .orderBy(inventory_items.name),
+    db.select().from(inventory_stocks),
+  ]);
+
+  const stockMap = new Map<string, Record<string, number>>();
+  for (const row of stockRows) {
+    const byWh = stockMap.get(row.item_id) ?? {};
+    byWh[row.warehouse_id] = Number(row.qty ?? 0);
+    stockMap.set(row.item_id, byWh);
+  }
+
+  const defaultWh = whRows.find((w) => w.is_default) ?? whRows[0] ?? null;
+  const products = itemRows.map((item) => {
+    const stocksByWarehouse = stockMap.get(item.id) ?? {};
+    const totalStock = Object.values(stocksByWarehouse).reduce((acc, q) => acc + q, 0);
+    return {
+      ...item,
+      stocks_by_warehouse: stocksByWarehouse,
+      total_stock: totalStock,
+    };
+  });
+
+  return c.json({
+    warehouses: jsonSafe(whRows),
+    default_warehouse_id: defaultWh?.id ?? null,
+    accounts: jsonSafe(accRows),
+    products: jsonSafe(products),
+  });
+});
+
+router.get('/pos/sales', requirePermission('finance', 'view'), async (c) => {
+  const statusFilter = c.req.query('status');
+  const methodFilter = c.req.query('payment_method');
+  const limit = Math.min(Number(c.req.query('limit') ?? 80) || 80, 200);
+  const db = getDb();
+
+  const conditions = [];
+  if (statusFilter === 'completed' || statusFilter === 'void') {
+    conditions.push(eq(pos_sales.status, statusFilter));
+  }
+  if (
+    methodFilter === 'cash' ||
+    methodFilter === 'qris' ||
+    methodFilter === 'transfer' ||
+    methodFilter === 'ewallet'
+  ) {
+    conditions.push(eq(pos_sales.payment_method, methodFilter));
+  }
+
+  const salesRows = await db
+    .select({
+      id: pos_sales.id,
+      sale_number: pos_sales.sale_number,
+      warehouse_id: pos_sales.warehouse_id,
+      warehouse_name: warehouses.name,
+      account_id: pos_sales.account_id,
+      account_name: finance_accounts.name,
+      finance_transaction_id: pos_sales.finance_transaction_id,
+      cashier_id: pos_sales.cashier_id,
+      cashier_name: employees.full_name,
+      customer_name: pos_sales.customer_name,
+      payment_method: pos_sales.payment_method,
+      subtotal: pos_sales.subtotal,
+      discount_type: pos_sales.discount_type,
+      discount_value: pos_sales.discount_value,
+      discount_amount: pos_sales.discount_amount,
+      tax_percent: pos_sales.tax_percent,
+      tax_amount: pos_sales.tax_amount,
+      total_amount: pos_sales.total_amount,
+      paid_amount: pos_sales.paid_amount,
+      change_amount: pos_sales.change_amount,
+      status: pos_sales.status,
+      note: pos_sales.note,
+      void_reason: pos_sales.void_reason,
+      voided_at: pos_sales.voided_at,
+      created_at: pos_sales.created_at,
+    })
+    .from(pos_sales)
+    .innerJoin(employees, eq(employees.id, pos_sales.cashier_id))
+    .innerJoin(finance_accounts, eq(finance_accounts.id, pos_sales.account_id))
+    .leftJoin(warehouses, eq(warehouses.id, pos_sales.warehouse_id))
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(pos_sales.created_at))
+    .limit(limit);
+
+  const saleIds = salesRows.map((s) => s.id);
+  const itemRows = saleIds.length
+    ? await db
+        .select()
+        .from(pos_sale_items)
+        .where(inArray(pos_sale_items.sale_id, saleIds))
+    : [];
+
+  const itemsBySale = new Map<string, typeof itemRows>();
+  for (const row of itemRows) {
+    const bucket = itemsBySale.get(row.sale_id) ?? [];
+    bucket.push(row);
+    itemsBySale.set(row.sale_id, bucket);
+  }
+
+  const todayYmd = jakartaYmd(new Date());
+  const [aggRows, methodRows, topProductRows, accountRows] = await Promise.all([
+    db.execute(sql`
+      SELECT
+        coalesce(sum(case when status = 'completed' and to_char(created_at AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD') = ${todayYmd} then total_amount else 0 end), 0)::text AS today_revenue,
+        count(*) FILTER (WHERE status = 'completed' AND to_char(created_at AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD') = ${todayYmd})::int AS today_count,
+        coalesce(sum(case when status = 'completed' then total_amount else 0 end), 0)::text AS period_revenue,
+        count(*) FILTER (WHERE status = 'completed')::int AS period_count,
+        coalesce(sum(case when status = 'completed' then discount_amount else 0 end), 0)::text AS period_discount_total,
+        coalesce(sum(case when status = 'completed' then tax_amount else 0 end), 0)::text AS period_tax_total,
+        count(*) FILTER (WHERE status = 'void')::int AS void_count
+      FROM pos_sales
+    `),
+    db.execute(sql`
+      SELECT
+        payment_method,
+        count(*)::int AS tx_count,
+        coalesce(sum(total_amount), 0)::text AS total_amount
+      FROM pos_sales
+      WHERE status = 'completed'
+      GROUP BY payment_method
+    `),
+    db.execute(sql`
+      SELECT
+        coalesce(psi.sku, '') AS sku,
+        psi.item_name,
+        psi.unit,
+        sum(psi.qty)::int AS qty_sold,
+        coalesce(sum(psi.line_total), 0)::text AS revenue
+      FROM pos_sale_items psi
+      INNER JOIN pos_sales ps ON ps.id = psi.sale_id
+      WHERE ps.status = 'completed'
+      GROUP BY coalesce(psi.sku, ''), psi.item_name, psi.unit
+      ORDER BY sum(psi.line_total) DESC
+      LIMIT 5
+    `),
+    db
+      .select()
+      .from(finance_accounts)
+      .where(eq(finance_accounts.is_active, true))
+      .orderBy(finance_accounts.name),
+  ]);
+
+  const agg = (aggRows.rows[0] ?? {}) as Record<string, unknown>;
+  const todayRev = BigInt((agg.today_revenue as string) ?? '0');
+  const todayCount = Number(agg.today_count ?? 0);
+  const todayAvg = todayCount > 0 ? todayRev / BigInt(todayCount) : 0n;
+
+  const byMethod: Record<'cash' | 'qris' | 'transfer' | 'ewallet', { count: number; total: string }> = {
+    cash: { count: 0, total: '0' },
+    qris: { count: 0, total: '0' },
+    transfer: { count: 0, total: '0' },
+    ewallet: { count: 0, total: '0' },
+  };
+  for (const r of methodRows.rows) {
+    const m = String(r.payment_method) as 'cash' | 'qris' | 'transfer' | 'ewallet';
+    if (m in byMethod) {
+      byMethod[m] = {
+        count: Number(r.tx_count ?? 0),
+        total: String(r.total_amount ?? '0'),
+      };
+    }
+  }
+
+  const enrichedSales = salesRows.map((s) => ({
+    ...s,
+    items: itemsBySale.get(s.id) ?? [],
+  }));
+
+  return c.json({
+    sales: jsonSafe(enrichedSales),
+    report: {
+      today_revenue: todayRev.toString(),
+      today_count: todayCount,
+      today_avg_ticket: todayAvg.toString(),
+      period_revenue: String(agg.period_revenue ?? '0'),
+      period_count: Number(agg.period_count ?? 0),
+      period_discount_total: String(agg.period_discount_total ?? '0'),
+      period_tax_total: String(agg.period_tax_total ?? '0'),
+      void_count: Number(agg.void_count ?? 0),
+      by_payment_method: byMethod,
+      top_products: topProductRows.rows,
+      accounts: jsonSafe(accountRows),
+    },
+  });
+});
+
+router.post('/pos/sales', requirePermission('finance', 'create'), async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = createPosSaleSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.flatten() }, 400);
+  }
+
+  const auth = c.get('auth');
+  const data = parsed.data;
+  const db = getDb();
+
+  try {
+    const out = await db.transaction(async (tx) => {
+      const [acc] = await tx
+        .select()
+        .from(finance_accounts)
+        .where(eq(finance_accounts.id, data.account_id))
+        .for('update');
+      if (!acc) throw new HttpStatusError(404, 'Akun kas pembayaran tidak ditemukan.');
+      if (!acc.is_active) throw new HttpStatusError(400, `Akun kas ${acc.name} sedang nonaktif.`);
+
+      const needsInventoryWarehouse = data.items.some((i) => Boolean(i.inventory_item_id));
+      let resolvedWh: { id: string; name: string } | null = null;
+      if (data.warehouse_id) {
+        const [wh] = await tx
+          .select({ id: warehouses.id, name: warehouses.name })
+          .from(warehouses)
+          .where(eq(warehouses.id, data.warehouse_id))
+          .limit(1);
+        if (!wh) throw new HttpStatusError(404, 'Gudang outlet tidak ditemukan.');
+        resolvedWh = wh;
+      } else if (needsInventoryWarehouse) {
+        const [wh] = await tx
+          .select({ id: warehouses.id, name: warehouses.name })
+          .from(warehouses)
+          .orderBy(desc(warehouses.is_default), warehouses.name)
+          .limit(1);
+        if (!wh) {
+          throw new HttpStatusError(400, 'Belum ada gudang terdaftar untuk memotong stok inventaris.');
+        }
+        resolvedWh = wh;
+      }
+
+      const saleNumber = buildPosSaleNumber(new Date());
+
+      // Agregasikan qty yang dibutuhkan per inventory_item_id sebelum locking
+      const qtyNeededByItem = new Map<string, number>();
+      for (const line of data.items) {
+        if (line.inventory_item_id) {
+          qtyNeededByItem.set(
+            line.inventory_item_id,
+            (qtyNeededByItem.get(line.inventory_item_id) ?? 0) + line.qty,
+          );
+        }
+      }
+
+      const itemMetaMap = new Map<
+        string,
+        { id: string; sku: string; name: string; unit: string; cost_price: bigint; min_stock: number }
+      >();
+      const lowStockAlerts: Array<{ name: string; sku: string; qty: number }> = [];
+
+      if (qtyNeededByItem.size > 0 && resolvedWh) {
+        const sortedIds = [...qtyNeededByItem.keys()].sort();
+        const invRows = await tx
+          .select()
+          .from(inventory_items)
+          .where(inArray(inventory_items.id, sortedIds));
+
+        for (const r of invRows) {
+          if (!r.is_active) {
+            throw new HttpStatusError(400, `Produk ${r.name} sedang dinonaktifkan.`);
+          }
+          itemMetaMap.set(r.id, r);
+        }
+
+        for (const itemId of sortedIds) {
+          const item = itemMetaMap.get(itemId);
+          if (!item) {
+            throw new HttpStatusError(404, `Produk inventaris ${itemId} tidak ditemukan.`);
+          }
+          const needQty = qtyNeededByItem.get(itemId)!;
+
+          await tx
+            .insert(inventory_stocks)
+            .values({ item_id: itemId, warehouse_id: resolvedWh.id, qty: 0 })
+            .onConflictDoNothing({
+              target: [inventory_stocks.item_id, inventory_stocks.warehouse_id],
+            });
+
+          const [stockRow] = await tx
+            .select()
+            .from(inventory_stocks)
+            .where(
+              and(
+                eq(inventory_stocks.item_id, itemId),
+                eq(inventory_stocks.warehouse_id, resolvedWh.id),
+              ),
+            )
+            .for('update');
+
+          const avail = Number(stockRow?.qty ?? 0);
+          if (avail < needQty) {
+            throw new HttpStatusError(
+              400,
+              `Stok ${item.name} di ${resolvedWh.name} tidak mencukupi (tersisa ${avail}, diminta ${needQty}).`,
+            );
+          }
+
+          const nextQty = avail - needQty;
+          await tx
+            .update(inventory_stocks)
+            .set({ qty: nextQty })
+            .where(
+              and(
+                eq(inventory_stocks.item_id, itemId),
+                eq(inventory_stocks.warehouse_id, resolvedWh.id),
+              ),
+            );
+
+          await tx.insert(stock_movements).values({
+            item_id: itemId,
+            warehouse_id: resolvedWh.id,
+            movement_type: 'out',
+            qty_delta: -needQty,
+            unit_cost: item.cost_price,
+            note: `Penjualan POS ${saleNumber}`,
+            created_by: auth.employee.id,
+          });
+
+          if (nextQty <= item.min_stock) {
+            lowStockAlerts.push({ name: item.name, sku: item.sku, qty: nextQty });
+          }
+        }
+      }
+
+      let subtotal = 0n;
+      const preparedItems = data.items.map((line) => {
+        const meta = line.inventory_item_id ? itemMetaMap.get(line.inventory_item_id) : undefined;
+        const unitPrice = BigInt(line.unit_price);
+        const lineTotal = BigInt(line.qty) * unitPrice;
+        subtotal += lineTotal;
+        return {
+          inventory_item_id: line.inventory_item_id ?? null,
+          sku: meta?.sku ?? line.sku ?? null,
+          item_name: line.item_name.trim(),
+          unit: line.unit || meta?.unit || 'pcs',
+          qty: line.qty,
+          unit_price: unitPrice,
+          unit_cost: meta?.cost_price ?? 0n,
+          line_total: lineTotal,
+        };
+      });
+
+      const discountValue = BigInt(data.discount_value ?? 0);
+      const discountAmount = computePosDiscount(subtotal, data.discount_type, discountValue);
+      const taxable = subtotal - discountAmount;
+      const taxAmount = (taxable * BigInt(data.tax_percent)) / 100n;
+      const totalAmount = taxable + taxAmount;
+      if (totalAmount <= 0n) {
+        throw new HttpStatusError(400, 'Total pembayaran POS harus lebih besar dari Rp 0.');
+      }
+
+      const paidAmount = data.paid_amount ? BigInt(data.paid_amount) : totalAmount;
+      if (paidAmount < totalAmount) {
+        throw new HttpStatusError(400, 'Nominal bayar kurang dari total tagihan POS.');
+      }
+      const changeAmount = paidAmount - totalAmount;
+
+      const beforeAccBalance = acc.balance;
+      const nextAccBalance = acc.balance + totalAmount;
+      await tx
+        .update(finance_accounts)
+        .set({ balance: nextAccBalance })
+        .where(eq(finance_accounts.id, acc.id));
+
+      const customerSuffix = data.customer_name?.trim() ? ` - ${data.customer_name.trim()}` : '';
+      const [finTx] = await tx
+        .insert(finance_transactions)
+        .values({
+          account_id: acc.id,
+          type: 'income',
+          amount: totalAmount,
+          description: `Penjualan POS ${saleNumber} (${data.payment_method.toUpperCase()})${customerSuffix}`,
+          reference_type: 'pos_sale',
+          status: 'posted',
+          created_by: auth.employee.id,
+          approved_by: auth.employee.id,
+        })
+        .returning({
+          id: finance_transactions.id,
+          txid: txidExpr,
+        });
+
+      const [sale] = await tx
+        .insert(pos_sales)
+        .values({
+          sale_number: saleNumber,
+          warehouse_id: resolvedWh?.id ?? null,
+          account_id: acc.id,
+          finance_transaction_id: finTx.id,
+          cashier_id: auth.employee.id,
+          customer_name: data.customer_name?.trim() || null,
+          payment_method: data.payment_method,
+          subtotal,
+          discount_type: data.discount_type,
+          discount_value: discountValue,
+          discount_amount: discountAmount,
+          tax_percent: data.tax_percent,
+          tax_amount: taxAmount,
+          total_amount: totalAmount,
+          paid_amount: paidAmount,
+          change_amount: changeAmount,
+          status: 'completed',
+          note: data.note?.trim() || null,
+        })
+        .returning();
+
+      await tx
+        .update(finance_transactions)
+        .set({ reference_id: sale.id })
+        .where(eq(finance_transactions.id, finTx.id));
+
+      const insertedItems = await tx
+        .insert(pos_sale_items)
+        .values(preparedItems.map((it) => ({ ...it, sale_id: sale.id })))
+        .returning();
+
+      await writeAuditLog(tx, {
+        actorId: auth.employee.id,
+        platform: auth.platform,
+        module: 'finance',
+        action: 'pos_sale_created',
+        entityId: sale.id,
+        beforeData: { account_balance: beforeAccBalance.toString() },
+        afterData: {
+          sale_number: sale.sale_number,
+          total_amount: sale.total_amount.toString(),
+          payment_method: sale.payment_method,
+          account_balance: nextAccBalance.toString(),
+          items_count: insertedItems.length,
+        },
+      });
+
+      await emitErpEvent(tx, 'erp:finance', 'pos_sale_created', {
+        sale_id: sale.id,
+        sale_number: sale.sale_number,
+        total_amount: sale.total_amount.toString(),
+        account_id: acc.id,
+        account_balance: nextAccBalance.toString(),
+      });
+
+      if (qtyNeededByItem.size > 0) {
+        await emitErpEvent(tx, 'erp:inventory', 'stock_movement_recorded', {
+          sale_id: sale.id,
+          warehouse_id: resolvedWh?.id ?? null,
+          items_count: qtyNeededByItem.size,
+        });
+      }
+
+      const financeViewers = await resolveModuleViewers(tx, 'finance');
+      await notifyUsersInTx(tx, {
+        module: 'finance',
+        eventType: 'pos_sale_created',
+        title: `Penjualan Kasir ${sale.sale_number}`,
+        body: `${data.payment_method.toUpperCase()} via ${acc.name}: ${formatRupiah(totalAmount)}${customerSuffix}`,
+        recipients: financeViewers,
+        excludeAuthUserId: auth.authUserId,
+        actorEmployeeId: auth.employee.id,
+        entityId: sale.id,
+      });
+
+      if (lowStockAlerts.length > 0) {
+        const invViewers = await resolveModuleViewers(tx, 'inventory');
+        const firstLow = lowStockAlerts[0]!;
+        await notifyUsersInTx(tx, {
+          module: 'inventory',
+          eventType: 'low_stock_alert',
+          title: 'Stok menipis usai penjualan POS',
+          body: `${firstLow.name} (${firstLow.sku}) tersisa ${firstLow.qty}.`,
+          recipients: invViewers,
+          excludeAuthUserId: auth.authUserId,
+          actorEmployeeId: auth.employee.id,
+          entityId: sale.id,
+        });
+      }
+
+      return {
+        sale: {
+          ...sale,
+          cashier_name: auth.employee.full_name,
+          account_name: acc.name,
+          warehouse_name: resolvedWh?.name ?? null,
+          items: insertedItems,
+        },
+        txid: finTx.txid,
+        low_stock_alerts: lowStockAlerts,
+      };
+    });
+
+    return c.json(jsonSafe(out), 201);
+  } catch (err) {
+    if (err instanceof HttpStatusError) {
+      return c.json({ error: err.message }, err.status);
+    }
+    throw err;
+  }
+});
+
+router.get('/pos/sales/:id/receipt-pdf', requirePermission('finance', 'view'), async (c) => {
+  const id = c.req.param('id');
+  if (!id) return c.json({ error: 'Missing POS sale id.' }, 400);
+  const db = getDb();
+
+  const [saleRow] = await db
+    .select({
+      id: pos_sales.id,
+      sale_number: pos_sales.sale_number,
+      created_at: pos_sales.created_at,
+      cashier_name: employees.full_name,
+      customer_name: pos_sales.customer_name,
+      warehouse_name: warehouses.name,
+      account_name: finance_accounts.name,
+      payment_method: pos_sales.payment_method,
+      status: pos_sales.status,
+      subtotal: pos_sales.subtotal,
+      discount_type: pos_sales.discount_type,
+      discount_value: pos_sales.discount_value,
+      discount_amount: pos_sales.discount_amount,
+      tax_percent: pos_sales.tax_percent,
+      tax_amount: pos_sales.tax_amount,
+      total_amount: pos_sales.total_amount,
+      paid_amount: pos_sales.paid_amount,
+      change_amount: pos_sales.change_amount,
+      note: pos_sales.note,
+    })
+    .from(pos_sales)
+    .innerJoin(employees, eq(employees.id, pos_sales.cashier_id))
+    .innerJoin(finance_accounts, eq(finance_accounts.id, pos_sales.account_id))
+    .leftJoin(warehouses, eq(warehouses.id, pos_sales.warehouse_id))
+    .where(eq(pos_sales.id, id))
+    .limit(1);
+
+  if (!saleRow) {
+    return c.json({ error: 'Transaksi POS tidak ditemukan.' }, 404);
+  }
+
+  const items = await db
+    .select()
+    .from(pos_sale_items)
+    .where(eq(pos_sale_items.sale_id, saleRow.id));
+
+  const pdfBytes = await generatePosReceiptPdf({
+    saleNumber: saleRow.sale_number,
+    createdAt: saleRow.created_at,
+    cashierName: saleRow.cashier_name,
+    customerName: saleRow.customer_name,
+    warehouseName: saleRow.warehouse_name,
+    accountName: saleRow.account_name,
+    paymentMethod: saleRow.payment_method as 'cash' | 'qris' | 'transfer' | 'ewallet',
+    status: saleRow.status as 'completed' | 'void',
+    items: items.map((it) => ({
+      itemName: it.item_name,
+      qty: it.qty,
+      unit: it.unit,
+      unitPrice: it.unit_price,
+      lineTotal: it.line_total,
+    })),
+    subtotal: saleRow.subtotal,
+    discountType: saleRow.discount_type as 'none' | 'amount' | 'percent',
+    discountValue: saleRow.discount_value,
+    discountAmount: saleRow.discount_amount,
+    taxPercent: saleRow.tax_percent,
+    taxAmount: saleRow.tax_amount,
+    totalAmount: saleRow.total_amount,
+    paidAmount: saleRow.paid_amount,
+    changeAmount: saleRow.change_amount,
+    note: saleRow.note,
+  });
+
+  const objectKey = `receipt/pos-${saleRow.id}-${saleRow.status}.pdf`;
+  await uploadObject({
+    key: objectKey,
+    body: pdfBytes,
+    contentType: 'application/pdf',
+  });
+  await db
+    .update(pos_sales)
+    .set({ receipt_pdf_object_key: objectKey })
+    .where(eq(pos_sales.id, saleRow.id));
+
+  const downloadUrl = await createPresignedDownloadUrl({ key: objectKey, expiresIn: 3600 });
+  return c.json({ object_key: objectKey, download_url: downloadUrl });
+});
+
+router.post('/pos/sales/:id/void', requirePermission('finance', 'approve'), async (c) => {
+  const id = c.req.param('id');
+  if (!id) return c.json({ error: 'Missing POS sale id.' }, 400);
+  const rawBody = await c.req.json().catch(() => ({}));
+  const parsed = voidPosSaleSchema.safeParse(rawBody ?? {});
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.flatten() }, 400);
+  }
+
+  const auth = c.get('auth');
+  const reason = parsed.data.reason?.trim() || 'Dibatalkan / Retur Kasir';
+  const db = getDb();
+
+  try {
+    const voided = await db.transaction(async (tx) => {
+      const [sale] = await tx
+        .select()
+        .from(pos_sales)
+        .where(eq(pos_sales.id, id))
+        .for('update');
+      if (!sale) throw new HttpStatusError(404, 'Transaksi POS tidak ditemukan.');
+      if (sale.status === 'void') {
+        throw new HttpStatusError(400, 'Transaksi POS ini sudah dibatalkan (void).');
+      }
+
+      const [acc] = await tx
+        .select()
+        .from(finance_accounts)
+        .where(eq(finance_accounts.id, sale.account_id))
+        .for('update');
+      if (!acc) throw new HttpStatusError(404, 'Akun kas tidak ditemukan.');
+      if (acc.balance < sale.total_amount) {
+        throw new HttpStatusError(
+          400,
+          `Saldo akun ${acc.name} tidak mencukupi untuk refund/void POS ini.`,
+        );
+      }
+
+      const nextBalance = acc.balance - sale.total_amount;
+      await tx
+        .update(finance_accounts)
+        .set({ balance: nextBalance })
+        .where(eq(finance_accounts.id, acc.id));
+
+      if (sale.finance_transaction_id) {
+        await tx
+          .update(finance_transactions)
+          .set({ status: 'void' })
+          .where(eq(finance_transactions.id, sale.finance_transaction_id));
+      }
+
+      const saleItems = await tx
+        .select()
+        .from(pos_sale_items)
+        .where(eq(pos_sale_items.sale_id, sale.id));
+
+      let restoredInventoryCount = 0;
+      if (sale.warehouse_id) {
+        const restoreByItem = new Map<string, { qty: number; unitCost: bigint }>();
+        for (const it of saleItems) {
+          if (it.inventory_item_id) {
+            const prev = restoreByItem.get(it.inventory_item_id);
+            restoreByItem.set(it.inventory_item_id, {
+              qty: (prev?.qty ?? 0) + it.qty,
+              unitCost: it.unit_cost,
+            });
+          }
+        }
+        const sortedIds = [...restoreByItem.keys()].sort();
+        for (const itemId of sortedIds) {
+          const restore = restoreByItem.get(itemId)!;
+          await tx
+            .insert(inventory_stocks)
+            .values({ item_id: itemId, warehouse_id: sale.warehouse_id, qty: 0 })
+            .onConflictDoNothing({
+              target: [inventory_stocks.item_id, inventory_stocks.warehouse_id],
+            });
+          const [stockRow] = await tx
+            .select()
+            .from(inventory_stocks)
+            .where(
+              and(
+                eq(inventory_stocks.item_id, itemId),
+                eq(inventory_stocks.warehouse_id, sale.warehouse_id),
+              ),
+            )
+            .for('update');
+          const nextQty = Number(stockRow?.qty ?? 0) + restore.qty;
+          await tx
+            .update(inventory_stocks)
+            .set({ qty: nextQty })
+            .where(
+              and(
+                eq(inventory_stocks.item_id, itemId),
+                eq(inventory_stocks.warehouse_id, sale.warehouse_id),
+              ),
+            );
+          await tx.insert(stock_movements).values({
+            item_id: itemId,
+            warehouse_id: sale.warehouse_id,
+            movement_type: 'in',
+            qty_delta: restore.qty,
+            unit_cost: restore.unitCost,
+            note: `Retur/Void POS ${sale.sale_number}: ${reason}`,
+            created_by: auth.employee.id,
+          });
+          restoredInventoryCount += 1;
+        }
+      }
+
+      const [updatedSale] = await tx
+        .update(pos_sales)
+        .set({
+          status: 'void',
+          voided_by: auth.employee.id,
+          voided_at: new Date(),
+          void_reason: reason,
+          receipt_pdf_object_key: null,
+        })
+        .where(eq(pos_sales.id, sale.id))
+        .returning();
+
+      await writeAuditLog(tx, {
+        actorId: auth.employee.id,
+        platform: auth.platform,
+        module: 'finance',
+        action: 'pos_sale_voided',
+        entityId: sale.id,
+        beforeData: {
+          status: sale.status,
+          total_amount: sale.total_amount.toString(),
+          account_balance: acc.balance.toString(),
+        },
+        afterData: {
+          status: 'void',
+          void_reason: reason,
+          account_balance: nextBalance.toString(),
+          restored_inventory_items: restoredInventoryCount,
+        },
+      });
+
+      await emitErpEvent(tx, 'erp:finance', 'pos_sale_voided', {
+        sale_id: sale.id,
+        sale_number: sale.sale_number,
+        account_id: acc.id,
+        account_balance: nextBalance.toString(),
+      });
+
+      if (restoredInventoryCount > 0) {
+        await emitErpEvent(tx, 'erp:inventory', 'stock_movement_recorded', {
+          sale_id: sale.id,
+          warehouse_id: sale.warehouse_id,
+          restored_items_count: restoredInventoryCount,
+        });
+      }
+
+      return updatedSale;
+    });
+
+    return c.json({ sale: jsonSafe(voided) });
   } catch (err) {
     if (err instanceof HttpStatusError) {
       return c.json({ error: err.message }, err.status);

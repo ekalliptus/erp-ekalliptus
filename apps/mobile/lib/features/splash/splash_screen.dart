@@ -87,7 +87,24 @@ class _SplashScreenState extends ConsumerState<SplashScreen> with SingleTickerPr
     if (widget.onResolved != null) {
       widget.onResolved!(authenticated);
     } else {
-      context.go(authenticated ? '/dashboard' : '/login');
+      final target = authenticated ? '/dashboard' : '/login';
+      try {
+        final permissionService = ref.read(permissionSetupServiceProvider);
+        final onboarded = await permissionService.hasCompletedOnboarding();
+        if (!onboarded) {
+          final summary = await permissionService.inspectAll();
+          if (!mounted) return;
+          if (!summary.allEssentialGranted) {
+            context.go('/permissions?next=${Uri.encodeComponent(target)}');
+            return;
+          }
+          await permissionService.markOnboardingCompleted();
+        }
+      } catch (_) {
+        // Lanjutkan ke rute utama bila pengecekan izin gagal.
+      }
+      if (!mounted) return;
+      context.go(target);
     }
   }
 

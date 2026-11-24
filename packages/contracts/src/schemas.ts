@@ -145,12 +145,65 @@ export const createOfficeSchema = z.object({
   work_end_time: z.string().regex(/^\d{2}:\d{2}$/).default('17:00'),
 });
 
+export const updateOfficeSchema = z.object({
+  name: z.string().trim().min(2).max(100).optional(),
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+  radius_meters: z.number().int().min(20).max(5000).optional(),
+  work_start_time: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  work_end_time: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+});
+
+export const attendanceVerificationMethodSchema = z.enum(['biometric', 'face_scan', 'qr', 'selfie']);
+
+export const faceModelSchema = z.enum(['web_faceapi_128d', 'mobile_facenet_192d']);
+
+export const faceDescriptorSchema = z.array(z.number().finite()).min(128).max(192);
+
+export const faceEnrollSchema = z.object({
+  face_model: faceModelSchema,
+  face_descriptor: faceDescriptorSchema,
+  face_samples: z.array(faceDescriptorSchema).min(1).max(6).optional(),
+  enrollment_poses: z.array(z.string().trim().min(1).max(32)).min(1).max(6).optional(),
+  selfie_object_key: z.string().trim().min(3).max(255),
+  derived_from_reference: z.boolean().optional(),
+  replace: z.boolean().optional(),
+});
+
+export const faceVerifySchema = z.object({
+  face_model: faceModelSchema,
+  face_descriptor: faceDescriptorSchema,
+});
+
+export const attendanceDeviceInfoSchema = z
+  .object({
+    brand: z.string().trim().max(80).optional().nullable(),
+    model: z.string().trim().max(100).optional().nullable(),
+    manufacturer: z.string().trim().max(80).optional().nullable(),
+    os_version: z.string().trim().max(80).optional().nullable(),
+    platform: z.string().trim().max(32).optional().nullable(),
+    device_id: z.string().trim().max(128).optional().nullable(),
+    is_physical_device: z.boolean().optional().nullable(),
+    local_ip: z.string().trim().max(64).optional().nullable(),
+    gps_accuracy_meters: z.number().nonnegative().max(100000).optional().nullable(),
+    is_mocked_gps: z.boolean().optional().nullable(),
+    biometric_type: z.string().trim().max(64).optional().nullable(),
+    face_similarity_percent: z.number().min(0).max(100).optional().nullable(),
+  })
+  .optional()
+  .nullable();
+
 export const clockInSchema = z.object({
   office_id: z.string().uuid(),
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
   selfie_object_key: z.string().trim().min(3).max(255).optional().nullable(),
   qr_token: z.string().trim().min(3).max(120).optional().nullable(),
+  verification_method: attendanceVerificationMethodSchema.optional(),
+  biometric_verified: z.boolean().optional(),
+  face_model: faceModelSchema.optional().nullable(),
+  face_descriptor: faceDescriptorSchema.optional().nullable(),
+  device_info: attendanceDeviceInfoSchema,
   note: z.string().trim().max(300).optional().nullable(),
 });
 
@@ -158,6 +211,12 @@ export const clockOutSchema = z.object({
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
   selfie_object_key: z.string().trim().max(255).optional().nullable(),
+  qr_token: z.string().trim().min(3).max(120).optional().nullable(),
+  verification_method: attendanceVerificationMethodSchema.optional(),
+  biometric_verified: z.boolean().optional(),
+  face_model: faceModelSchema.optional().nullable(),
+  face_descriptor: faceDescriptorSchema.optional().nullable(),
+  device_info: attendanceDeviceInfoSchema,
   note: z.string().trim().max(300).optional().nullable(),
 });
 
@@ -207,6 +266,22 @@ export const setUsernameSchema = z.object({
   username: usernameBase,
 });
 
+export const updateMyProfileSchema = z
+  .object({
+    full_name: z.string().trim().min(2).max(120).optional(),
+    username: usernameBase.optional().nullable(),
+    phone: z.string().trim().max(32).optional().nullable(),
+    avatar_object_key: z.string().trim().max(255).optional().nullable(),
+  })
+  .refine(
+    (data) =>
+      data.full_name !== undefined ||
+      data.username !== undefined ||
+      data.phone !== undefined ||
+      data.avatar_object_key !== undefined,
+    { message: 'Minimal satu field profil harus diubah.' },
+  );
+
 export const claimAccountSchema = z.object({
   code: z.string().trim().min(6).max(32),
 });
@@ -219,9 +294,12 @@ export const createEmployeeSchema = z.object({
   phone: z.string().trim().max(32).optional().nullable(),
   role_id: z.string().uuid(),
   base_salary: bigintNonNegativeSchema,
+  issue_claim_code: z.boolean().optional(),
 });
 
 export const updateEmployeeSchema = z.object({
+  employee_code: z.string().trim().min(2).max(32).optional(),
+  email: z.string().email().transform((v) => v.toLowerCase()).optional(),
   full_name: z.string().trim().min(2).max(120).optional(),
   username: usernameBase.optional().nullable(),
   phone: z.string().trim().max(32).optional().nullable(),
@@ -232,7 +310,7 @@ export const updateEmployeeSchema = z.object({
 });
 
 export const presignUploadSchema = z.object({
-  category: z.enum(['receipt', 'selfie', 'product', 'avatar']),
+  category: z.enum(['receipt', 'selfie', 'product', 'avatar', 'release']),
   filename: z.string().trim().min(1).max(160),
   content_type: z.string().trim().min(3).max(120),
 });
@@ -256,4 +334,92 @@ export const sealRealtimeSchema = z.object({
 export const registerDeviceTokenSchema = z.object({
   token: z.string().trim().min(32).max(4096),
   platform: z.enum(['web', 'flutter']),
+});
+
+export const appPlatformSchema = z.enum(['android', 'web']);
+
+export const semverSchema = z
+  .string()
+  .trim()
+  .regex(/^\d+\.\d+\.\d+$/, 'Versi harus memakai format semver seperti 1.2.0');
+
+export const createAppReleaseSchema = z.object({
+  platform: appPlatformSchema,
+  version: semverSchema,
+  build_number: z.number().int().min(1).max(999999),
+  title: z.string().trim().min(3).max(120),
+  changelog: z.array(z.string().trim().min(2).max(240)).min(1).max(20),
+  download_url: z
+    .string()
+    .trim()
+    .url()
+    .refine(
+      (u) => u.startsWith('https://') || u.startsWith('http://'),
+      'URL unduhan harus diawali http:// atau https://',
+    )
+    .optional()
+    .nullable(),
+  file_object_key: z.string().trim().min(3).max(255).optional().nullable(),
+  file_size_bytes: bigintNonNegativeSchema.optional().nullable(),
+  is_mandatory: z.boolean().optional(),
+});
+
+export function compareSemver(a: string, b: string): number {
+  const parse = (raw: string): [number, number, number] => {
+    const clean = raw.trim().replace(/^v/i, '').split('+')[0]?.split('-')[0] ?? '0.0.0';
+    const parts = clean.split('.').map((p) => {
+      const n = Number.parseInt(p, 10);
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    });
+    return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+  };
+  const [a0, a1, a2] = parse(a);
+  const [b0, b1, b2] = parse(b);
+  if (a0 !== b0) return a0 > b0 ? 1 : -1;
+  if (a1 !== b1) return a1 > b1 ? 1 : -1;
+  if (a2 !== b2) return a2 > b2 ? 1 : -1;
+  return 0;
+}
+
+export function isNewerRelease(
+  currentVersion: string,
+  currentBuild: number,
+  latestVersion: string,
+  latestBuild: number,
+): boolean {
+  if (currentBuild <= 0) {
+    return compareSemver(latestVersion, currentVersion) > 0;
+  }
+  if (latestBuild > currentBuild) return true;
+  if (latestBuild < currentBuild) return false;
+  return compareSemver(latestVersion, currentVersion) > 0;
+}
+
+export const posPaymentMethodSchema = z.enum(['cash', 'qris', 'transfer', 'ewallet']);
+export const posDiscountTypeSchema = z.enum(['none', 'amount', 'percent']);
+
+export const posSaleItemInputSchema = z.object({
+  inventory_item_id: z.string().uuid().optional().nullable(),
+  sku: z.string().trim().max(64).optional().nullable(),
+  item_name: z.string().trim().min(1).max(140),
+  unit: z.string().trim().min(1).max(32).default('pcs'),
+  qty: z.number().int().positive().max(10000),
+  unit_price: bigintPositiveSchema,
+});
+
+export const createPosSaleSchema = z.object({
+  warehouse_id: z.string().uuid().optional().nullable(),
+  account_id: z.string().uuid(),
+  customer_name: z.string().trim().max(120).optional().nullable(),
+  payment_method: posPaymentMethodSchema,
+  discount_type: posDiscountTypeSchema.optional().default('none'),
+  discount_value: bigintNonNegativeSchema.optional().default(0),
+  tax_percent: z.number().int().min(0).max(100).optional().default(0),
+  paid_amount: bigintPositiveSchema.optional().nullable(),
+  note: z.string().trim().max(400).optional().nullable(),
+  items: z.array(posSaleItemInputSchema).min(1).max(100),
+});
+
+export const voidPosSaleSchema = z.object({
+  reason: z.string().trim().max(300).optional().nullable(),
 });

@@ -1,8 +1,11 @@
 import crypto from 'node:crypto';
-import { hasPermission, presignDownloadSchema, presignUploadSchema } from '@ekalliptus/contracts';
+import { presignDownloadSchema, presignUploadSchema } from '@ekalliptus/contracts';
+import { payroll_items } from '@ekalliptus/db';
+import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { writeAuditLog } from '../middleware/audit.js';
 import { getDb } from '../db.js';
+import { authorizeStorageDownload, isSafeObjectKey } from '../services/security-policy.js';
 import { createPresignedDownloadUrl, createPresignedUploadUrl } from '../services/storage.js';
 import type { AppEnv } from '../types.js';
 import type { ErpModulePlugin } from './plugin.js';
@@ -20,8 +23,17 @@ router.post('/presign-upload', async (c) => {
 
   const auth = c.get('auth');
   const { category, filename, content_type } = parsed.data;
+  if (category === 'release' && auth.roleCode !== 'owner') {
+    return c.json(
+      { error: 'Forbidden: hanya Owner yang dapat mengunggah file rilis aplikasi.' },
+      403,
+    );
+  }
   const safeName = sanitizeFilename(filename);
-  const objectKey = `${category}/${auth.employee.id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`;
+  const objectKey =
+    category === 'release'
+      ? `releases/android/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`
+      : `${category}/${auth.employee.id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`;
 
   const uploadUrl = await createPresignedUploadUrl({
     key: objectKey,
@@ -50,22 +62,37 @@ router.post('/presign-download', async (c) => {
   const parsed = presignDownloadSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
 
-  // Cek kepemilikan/izin: objek karyawan hanya untuk pemiliknya, slip gaji
-  // dan invoice butuh izin modul terkait.
+  // Cek kepemilikan/izin serta keamanan key path: cegah traversal & pastikan
+  // karyawan non-pengelola hanya bisa mengakses slip gaji miliknya sendiri.
   const auth = c.get('auth');
   const key = parsed.data.object_key;
-  const [top, second] = key.split('/');
-  let allowed = false;
-  if ((top === 'receipt' || top === 'selfie' || top === 'avatar') && second === auth.employee.id) {
-    allowed = true;
-  } else if (top === 'slips') {
-    allowed = hasPermission(auth.permissions, 'payroll', 'view');
-  } else if (top === 'invoices') {
-    allowed = hasPermission(auth.permissions, 'finance', 'view');
-  } else if (top === 'product') {
-    allowed = hasPermission(auth.permissions, 'inventory', 'view');
+  if (!isSafeObjectKey(key)) {
+    return c.json({ error: 'Invalid object key.' }, 400);
   }
-  if (!allowed) {
+  const [top] = key.split('/');
+  const decision = await authorizeStorageDownload({
+    key,
+    roleCode: auth.roleCode,
+    employeeId: auth.employee.id,
+    employeeCode: auth.employee.employee_code,
+    permissions: auth.permissions,
+    ownsSlipObject: async () => {
+      const [, runId] = key.split('/');
+      if (!runId) return false;
+      const [owned] = await getDb()
+        .select({ id: payroll_items.id })
+        .from(payroll_items)
+        .where(
+          and(
+            eq(payroll_items.employee_id, auth.employee.id),
+            eq(payroll_items.payroll_run_id, runId),
+          ),
+        )
+        .limit(1);
+      return Boolean(owned);
+    },
+  });
+  if (!decision.allowed) {
     return c.json({ error: 'Forbidden: Anda tidak berhak mengunduh objek ini.' }, 403);
   }
 

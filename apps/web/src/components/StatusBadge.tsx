@@ -4,15 +4,15 @@ export type BadgeTone = 'success' | 'warning' | 'danger' | 'info' | 'accent' | '
 
 const TONE_CLASSES: Record<BadgeTone, string> = {
   success:
-    'bg-success-soft text-[#14532D] border-[#BBF7D0] dark:bg-success-soft dark:text-[#86EFAC] dark:border-[#14532D]',
+    'bg-success-soft text-[#14532D] border-[#86EFAC] dark:bg-success-soft dark:text-[#86EFAC] dark:border-[#166534]',
   warning:
-    'bg-warning-soft text-[#78350F] border-[#FDE68A] dark:bg-warning-soft dark:text-[#FCD34D] dark:border-[#78350F]',
+    'bg-warning-soft text-[#78350F] border-[#FCD34D] dark:bg-warning-soft dark:text-[#FCD34D] dark:border-[#92400E]',
   danger:
-    'bg-danger-soft text-[#991B1B] border-[#FECACA] dark:bg-danger-soft dark:text-[#FCA5A5] dark:border-[#7F1D1D]',
+    'bg-danger-soft text-[#991B1B] border-[#FCA5A5] dark:bg-danger-soft dark:text-[#FCA5A5] dark:border-[#991B1B]',
   info:
-    'bg-info-soft text-[#075985] border-[#BAE6FD] dark:bg-info-soft dark:text-[#7DD3FC] dark:border-[#0C4A6E]',
+    'bg-info-soft text-[#075985] border-[#7DD3FC] dark:bg-info-soft dark:text-[#7DD3FC] dark:border-[#075985]',
   accent:
-    'bg-accent-soft text-[#115E59] border-[#99F6E4] dark:bg-accent-soft dark:text-[#34D399] dark:border-[#065F46]',
+    'bg-accent-soft text-[#115E59] border-[#5EEAD4] dark:bg-accent-soft dark:text-[#34D399] dark:border-[#065F46]',
   neutral:
     'bg-surface-subtle text-text-primary border-border-strong',
 };

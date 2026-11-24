@@ -1,6 +1,6 @@
 enum ErpDestination {
   dashboard('/dashboard', 'Beranda'),
-  finance('/finance', 'Keuangan'),
+  finance('/finance', 'Kasir'),
   inventory('/inventory', 'Stok'),
   attendance('/attendance', 'Absensi'),
   payroll('/payroll', 'Payroll'),
@@ -40,8 +40,15 @@ class ErpProfile {
   final String fullName;
   final String email;
   final String? username;
+  final String? phone;
+  final String baseSalary;
+  final bool isActive;
+  final String? avatarObjectKey;
+  final String? avatarUrl;
+  final String? createdAt;
   final String roleCode;
   final String roleName;
+  final String roleDescription;
   final Set<String> permissions;
   final ErpKpis kpis;
 
@@ -51,8 +58,15 @@ class ErpProfile {
     required this.fullName,
     required this.email,
     required this.username,
+    this.phone,
+    this.baseSalary = '0',
+    this.isActive = true,
+    this.avatarObjectKey,
+    this.avatarUrl,
+    this.createdAt,
     required this.roleCode,
     required this.roleName,
+    this.roleDescription = '',
     required this.permissions,
     required this.kpis,
   });
@@ -60,14 +74,22 @@ class ErpProfile {
   factory ErpProfile.fromJson(Map<String, dynamic> json) {
     final emp = (json['employee'] as Map<String, dynamic>?) ?? const {};
     final permList = (json['permissions'] as List<dynamic>?) ?? const [];
+    final rawAvatarUrl = emp['avatar_url']?.toString().trim();
     return ErpProfile(
       employeeId: (emp['id'] ?? '').toString(),
       employeeCode: (emp['employee_code'] ?? '').toString(),
       fullName: (emp['full_name'] ?? '').toString(),
       email: (emp['email'] ?? '').toString(),
       username: emp['username']?.toString(),
+      phone: emp['phone']?.toString(),
+      baseSalary: (emp['base_salary'] ?? '0').toString(),
+      isActive: emp['is_active'] != false,
+      avatarObjectKey: emp['avatar_object_key']?.toString(),
+      avatarUrl: (rawAvatarUrl != null && rawAvatarUrl.isNotEmpty) ? rawAvatarUrl : null,
+      createdAt: emp['created_at']?.toString(),
       roleCode: (json['role'] ?? 'staff').toString(),
       roleName: (json['role_name'] ?? 'Karyawan').toString(),
+      roleDescription: (json['role_description'] ?? '').toString(),
       permissions: permList.map((e) => e.toString()).toSet(),
       kpis: ErpKpis.fromJson((json['kpis'] as Map<String, dynamic>?) ?? const {}),
     );
@@ -77,24 +99,27 @@ class ErpProfile {
     return permissions.contains('$module:$action');
   }
 
-  /// Caps primary floating navigation bar at 4 tabs prioritized by role.
+  /// Caps primary floating navigation bar at 4 side tabs (Attendance sits in the centered Fingerprint button).
   List<ErpDestination> primaryBottomTabs() {
     final ordered = <ErpDestination>[ErpDestination.dashboard];
 
     if (roleCode == 'warehouse') {
       if (hasPermission('inventory', 'view')) ordered.add(ErpDestination.inventory);
-      if (hasPermission('attendance', 'view')) ordered.add(ErpDestination.attendance);
       if (hasPermission('finance', 'view')) ordered.add(ErpDestination.finance);
-    } else if (roleCode == 'hr') {
-      if (hasPermission('attendance', 'view')) ordered.add(ErpDestination.attendance);
       if (hasPermission('payroll', 'view')) ordered.add(ErpDestination.payroll);
-      if (hasPermission('rbac', 'view')) ordered.add(ErpDestination.rbacAudit);
+    } else if (roleCode == 'hr') {
+      if (hasPermission('payroll', 'view')) ordered.add(ErpDestination.payroll);
+      if (hasPermission('rbac', 'view') || hasPermission('audit', 'view')) {
+        ordered.add(ErpDestination.rbacAudit);
+      }
+      if (hasPermission('finance', 'view')) ordered.add(ErpDestination.finance);
+      if (hasPermission('inventory', 'view')) ordered.add(ErpDestination.inventory);
     } else {
       if (hasPermission('finance', 'view')) ordered.add(ErpDestination.finance);
       if (hasPermission('inventory', 'view')) ordered.add(ErpDestination.inventory);
-      if (hasPermission('attendance', 'view')) ordered.add(ErpDestination.attendance);
-      if (ordered.length < 4 && hasPermission('payroll', 'view')) {
-        ordered.add(ErpDestination.payroll);
+      if (hasPermission('payroll', 'view')) ordered.add(ErpDestination.payroll);
+      if (ordered.length < 4 && (hasPermission('rbac', 'view') || hasPermission('audit', 'view'))) {
+        ordered.add(ErpDestination.rbacAudit);
       }
     }
 
@@ -110,9 +135,6 @@ class ErpProfile {
     }
     if (!primary.contains(ErpDestination.inventory) && hasPermission('inventory', 'view')) {
       extras.add(ErpDestination.inventory);
-    }
-    if (!primary.contains(ErpDestination.attendance) && hasPermission('attendance', 'view')) {
-      extras.add(ErpDestination.attendance);
     }
     if (!primary.contains(ErpDestination.payroll) && hasPermission('payroll', 'view')) {
       extras.add(ErpDestination.payroll);

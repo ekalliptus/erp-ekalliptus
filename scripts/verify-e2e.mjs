@@ -36,8 +36,10 @@ const createdEmployeeIds = [];
 const createdAccountIds = [];
 const createdTransactionIds = [];
 const createdItemIds = [];
+const createdPosSaleIds = [];
 const createdAttendanceIds = [];
 const createdPayrollRunIds = [];
+const createdReleaseIds = [];
 const uploadedS3Keys = [];
 
 let realtimeClient = null;
@@ -140,11 +142,35 @@ async function main() {
   const ownerJwt = await signUpNeonAuth('E2E Owner', ownerEmail, password);
   const staffJwt = await signUpNeonAuth('E2E Staff', staffEmail, password);
 
+  const previewOwner = await apiJson('/api/auth/claim-preview', null, {
+    method: 'POST',
+    body: JSON.stringify({ code: ownerClaimCode }),
+  });
+  assert.equal(previewOwner.status, 200, 'claim-preview owner harus 200: ' + JSON.stringify(previewOwner.json));
+  assert.equal(previewOwner.json.valid, true);
+  assert.equal(previewOwner.json.employee?.email, ownerEmail);
+  assert.equal(previewOwner.json.employee?.full_name, 'E2E Verification Owner');
+  assert.equal(previewOwner.json.employee?.role_code, 'owner');
+  assert.equal(previewOwner.json.employee?.base_salary, undefined, 'claim-preview must not expose salary');
+
+  const previewWrong = await apiJson('/api/auth/claim-preview', null, {
+    method: 'POST',
+    body: JSON.stringify({ code: 'EK-WRONGCODE1' }),
+  });
+  assert.equal(previewWrong.status, 404, 'claim-preview kode salah harus 404');
+
   const ownerClaim = await apiJson('/api/auth/claim', ownerJwt, {
     method: 'POST',
     body: JSON.stringify({ code: ownerClaimCode }),
   });
   assert.equal(ownerClaim.status, 200, 'claim owner harus sukses: ' + JSON.stringify(ownerClaim.json));
+
+  const previewAfterClaim = await apiJson('/api/auth/claim-preview', null, {
+    method: 'POST',
+    body: JSON.stringify({ code: ownerClaimCode }),
+  });
+  assert.equal(previewAfterClaim.status, 404, 'claim-preview kode terpakai harus 404');
+
   const wrongCode = await apiJson('/api/auth/claim', staffJwt, {
     method: 'POST',
     body: JSON.stringify({ code: 'EK-WRONGCODE1' }),
@@ -155,7 +181,7 @@ async function main() {
     body: JSON.stringify({ code: staffClaimCode }),
   });
   assert.equal(staffClaim.status, 200, 'claim staff harus sukses: ' + JSON.stringify(staffClaim.json));
-  console.log('[PASS] Claim code activation (owner + staff) + wrong code rejected 403');
+  console.log('[PASS] Claim preview auto-fetch + activation (owner + staff) + wrong/used code guards');
 
   const ownerMe = await apiJson('/api/me', ownerJwt);
   assert.equal(ownerMe.status, 200);
@@ -335,6 +361,85 @@ async function main() {
   assert.equal(mvOut.json.low_stock_alert, true);
   console.log('[PASS] Inventory ACID stock movements + low_stock_alert verified');
 
+  // 5b. Kasir / POS Sales + Receipt PDF + Void/Retur Stock & Cash Restoration
+  const posCatRes = await apiJson('/api/finance/pos/catalog', ownerJwt);
+  assert.equal(posCatRes.status, 200);
+  const posProduct = posCatRes.json.products.find((p) => p.id === itemId);
+  assert.ok(posProduct, 'Created inventory item must appear in POS catalog');
+  assert.equal(posProduct.stocks_by_warehouse[defaultWh.id], 4);
+
+  const posCreateRes = await apiJson('/api/finance/pos/sales', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      warehouse_id: defaultWh.id,
+      account_id: kasId,
+      customer_name: `Pelanggan E2E ${ts}`,
+      payment_method: 'cash',
+      discount_type: 'percent',
+      discount_value: 10,
+      tax_percent: 11,
+      paid_amount: 800000,
+      note: 'E2E POS sale',
+      items: [
+        {
+          inventory_item_id: itemId,
+          sku: posProduct.sku,
+          item_name: posProduct.name,
+          unit: 'pcs',
+          qty: 2,
+          unit_price: 350000,
+        },
+        {
+          item_name: 'Biaya Pasang E2E',
+          unit: 'jasa',
+          qty: 1,
+          unit_price: 50000,
+        },
+      ],
+    }),
+  });
+  assert.equal(posCreateRes.status, 201, 'POS create sale must return 201: ' + JSON.stringify(posCreateRes.json));
+  const posSale = posCreateRes.json.sale;
+  createdPosSaleIds.push(posSale.id);
+  if (posSale.finance_transaction_id) {
+    createdTransactionIds.push(posSale.finance_transaction_id);
+  }
+  assert.equal(posSale.subtotal, '750000');
+  assert.equal(posSale.discount_amount, '75000');
+  assert.equal(posSale.tax_amount, '74250');
+  assert.equal(posSale.total_amount, '749250');
+  assert.equal(posSale.change_amount, '50750');
+
+  const posCatAfterSell = await apiJson('/api/finance/pos/catalog', ownerJwt);
+  assert.equal(posCatAfterSell.status, 200);
+  const soldProductAfter = posCatAfterSell.json.products.find((p) => p.id === itemId);
+  assert.equal(soldProductAfter.stocks_by_warehouse[defaultWh.id], 2);
+
+  const posSalesRes = await apiJson('/api/finance/pos/sales', ownerJwt);
+  assert.equal(posSalesRes.status, 200);
+  assert.ok(posSalesRes.json.sales.some((s) => s.id === posSale.id));
+
+  const posPdfRes = await apiJson(`/api/finance/pos/sales/${posSale.id}/receipt-pdf`, ownerJwt);
+  assert.equal(posPdfRes.status, 200);
+  assert.ok(posPdfRes.json.download_url, 'POS receipt PDF URL must be returned');
+  uploadedS3Keys.push(posPdfRes.json.object_key);
+  const posPdfGet = await fetch(posPdfRes.json.download_url);
+  assert.equal(posPdfGet.status, 200);
+  const posPdfBytes = Buffer.from(await posPdfGet.arrayBuffer());
+  assert.equal(posPdfBytes.subarray(0, 5).toString('ascii'), '%PDF-');
+
+  const posVoidRes = await apiJson(`/api/finance/pos/sales/${posSale.id}/void`, ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({ reason: 'E2E POS void test' }),
+  });
+  assert.equal(posVoidRes.status, 200);
+  assert.equal(posVoidRes.json.sale.status, 'void');
+
+  const posCatAfterVoid = await apiJson('/api/finance/pos/catalog', ownerJwt);
+  const restoredProductAfter = posCatAfterVoid.json.products.find((p) => p.id === itemId);
+  assert.equal(restoredProductAfter.stocks_by_warehouse[defaultWh.id], 4);
+  console.log('[PASS] Kasir / POS checkout, discount/PPN, stock deduction, PDF receipt & Void restoration verified');
+
   // 6. Attendance Geofence + Clock-In/Out
   const offRes = await apiJson('/api/attendance/offices', ownerJwt);
   assert.equal(offRes.status, 200);
@@ -359,18 +464,148 @@ async function main() {
       latitude: office.latitude,
       longitude: office.longitude,
       qr_token: 'E2E-QR-TOKEN',
+      verification_method: 'qr',
       note: 'E2E clock-in',
     }),
   });
   assert.equal(insideRes.status, 201);
   createdAttendanceIds.push(insideRes.json.record.id);
 
+  // 6b. Live Face Recognition Guards (status, enroll, verify, mismatch 403, clock-in/out, reset)
+  const faceVecA = Array.from({ length: 128 }, (_, i) => (i % 2 === 0 ? 0.15 : -0.1));
+  const faceVecMismatch = Array.from({ length: 128 }, (_, i) => (i % 2 === 0 ? -0.35 : 0.35));
+
+  const faceInitStatus = await apiJson('/api/attendance/face-status', staffJwt);
+  assert.equal(faceInitStatus.status, 200);
+  assert.equal(faceInitStatus.json.enrolled, false);
+
+  const unenrolledClockIn = await apiJson('/api/attendance/clock-in', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      office_id: office.id,
+      latitude: office.latitude,
+      longitude: office.longitude,
+      verification_method: 'face_scan',
+      face_model: 'web_faceapi_128d',
+      face_descriptor: faceVecA,
+      selfie_object_key: receiptKey,
+    }),
+  });
+  assert.equal(unenrolledClockIn.status, 400);
+
+  const enrollRes = await apiJson('/api/attendance/face-enroll', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      face_model: 'web_faceapi_128d',
+      face_descriptor: faceVecA,
+      selfie_object_key: receiptKey,
+    }),
+  });
+  assert.equal(enrollRes.status, 201);
+  assert.equal(enrollRes.json.enrolled, true);
+
+  const dupEnrollRes = await apiJson('/api/attendance/face-enroll', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      face_model: 'web_faceapi_128d',
+      face_descriptor: faceVecA,
+      selfie_object_key: receiptKey,
+    }),
+  });
+  assert.equal(dupEnrollRes.status, 409);
+
+  const verifyOkRes = await apiJson('/api/attendance/face-verify', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({ face_model: 'web_faceapi_128d', face_descriptor: faceVecA }),
+  });
+  assert.equal(verifyOkRes.status, 200);
+  assert.equal(verifyOkRes.json.matched, true);
+
+  const verifyMismatchRes = await apiJson('/api/attendance/face-verify', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({ face_model: 'web_faceapi_128d', face_descriptor: faceVecMismatch }),
+  });
+  assert.equal(verifyMismatchRes.status, 200);
+  assert.equal(verifyMismatchRes.json.matched, false);
+
+  const faceInMismatch = await apiJson('/api/attendance/clock-in', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      office_id: office.id,
+      latitude: office.latitude,
+      longitude: office.longitude,
+      verification_method: 'face_scan',
+      face_model: 'web_faceapi_128d',
+      face_descriptor: faceVecMismatch,
+      selfie_object_key: receiptKey,
+    }),
+  });
+  assert.equal(faceInMismatch.status, 403);
+
+  const faceInOk = await apiJson('/api/attendance/clock-in', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      office_id: office.id,
+      latitude: office.latitude,
+      longitude: office.longitude,
+      verification_method: 'face_scan',
+      face_model: 'web_faceapi_128d',
+      face_descriptor: faceVecA,
+      selfie_object_key: receiptKey,
+      note: 'E2E face clock-in',
+    }),
+  });
+  assert.equal(faceInOk.status, 201);
+  createdAttendanceIds.push(faceInOk.json.record.id);
+
+  const unverifiedOutRes = await apiJson('/api/attendance/clock-out', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({ note: 'Unverified E2E clock-out' }),
+  });
+  assert.equal(unverifiedOutRes.status, 400);
+
+  const faceOutMismatch = await apiJson('/api/attendance/clock-out', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      verification_method: 'face_scan',
+      face_model: 'web_faceapi_128d',
+      face_descriptor: faceVecMismatch,
+      selfie_object_key: receiptKey,
+    }),
+  });
+  assert.equal(faceOutMismatch.status, 403);
+
+  const faceOutOk = await apiJson('/api/attendance/clock-out', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      verification_method: 'face_scan',
+      face_model: 'web_faceapi_128d',
+      face_descriptor: faceVecA,
+      selfie_object_key: receiptKey,
+      note: 'E2E face clock-out',
+    }),
+  });
+  assert.equal(faceOutOk.status, 200);
+
+  const resetFaceRes = await apiJson(`/api/rbac/employees/${staffEmpId}/face`, ownerJwt, {
+    method: 'DELETE',
+  });
+  assert.equal(resetFaceRes.status, 200);
+
+  const faceAfterReset = await apiJson('/api/attendance/face-status', staffJwt);
+  assert.equal(faceAfterReset.status, 200);
+  assert.equal(faceAfterReset.json.enrolled, false);
+
   const outRes = await apiJson('/api/attendance/clock-out', ownerJwt, {
     method: 'POST',
-    body: JSON.stringify({ note: 'E2E clock-out' }),
+    body: JSON.stringify({
+      qr_token: 'E2E-QR-TOKEN',
+      verification_method: 'qr',
+      note: 'E2E clock-out',
+    }),
   });
   assert.equal(outRes.status, 200);
-  console.log('[PASS] Attendance Geofence rejection (400) + Clock-In/Clock-Out verified');
+  console.log('[PASS] Attendance Geofence + Face Recognition (enroll/mismatch 403/reset) + Clock-In/Out verified');
 
   // 7. Payroll + Postgres GENERATED net_salary + ACID Finance posting + Slip PDF
   const today = new Date().toISOString().slice(0, 10);
@@ -583,7 +818,191 @@ async function main() {
   assert.equal(dup.status, 409, 'duplicate username must be rejected with 409');
   console.log('[PASS] Username login flow verified (set, lookup, duplicate 409)');
 
-  console.log('\nALL 5 NEON SERVICES + NOTIFICATIONS VERIFIED END-TO-END SUCCESSFULLY!');
+  // 12. Owner Employee CRUD + Guards (Create w/ claim code, Update, Duplicate 409, Self/Staff Guards, Delete / 409 history)
+  const crudCode = `E2E-MGR-${ts % 100000}`;
+  const crudEmail = `e2e-mgr-${ts}@ekalliptus.com`;
+  const crudUsername = `e2emgr${ts % 100000}`;
+  const createMgr = await apiJson('/api/rbac/employees', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      employee_code: crudCode,
+      full_name: 'E2E Managed Employee',
+      email: crudEmail,
+      username: crudUsername,
+      phone: '081200011122',
+      role_id: staffRole.id,
+      base_salary: 4500000,
+      issue_claim_code: true,
+    }),
+  });
+  assert.equal(createMgr.status, 201, 'Owner create employee must succeed: ' + JSON.stringify(createMgr.json));
+  assert.ok(createMgr.json.claim_code && createMgr.json.claim_code.startsWith('EK-'), 'issue_claim_code must return claim_code');
+  const mgrEmpId = createMgr.json.employee.id;
+  createdEmployeeIds.push(mgrEmpId);
+
+  const listAfterCreate = await apiJson('/api/rbac/employees', ownerJwt);
+  assert.equal(listAfterCreate.status, 200);
+  const listedMgr = listAfterCreate.json.employees.find((e) => e.id === mgrEmpId);
+  assert.ok(listedMgr, 'Created employee must appear in GET /api/rbac/employees');
+  assert.equal(listedMgr.username, crudUsername);
+  assert.equal(listedMgr.has_claim_code, true);
+
+  const dupEmailRes = await apiJson('/api/rbac/employees', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      employee_code: `E2E-MGR2-${ts % 100000}`,
+      full_name: 'Dup Email Test',
+      email: crudEmail,
+      role_id: staffRole.id,
+      base_salary: 3000000,
+    }),
+  });
+  assert.equal(dupEmailRes.status, 409, 'Duplicate employee email must return 409 Conflict');
+
+  const updMgr = await apiJson(`/api/rbac/employees/${mgrEmpId}`, ownerJwt, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      full_name: 'E2E Managed Updated',
+      base_salary: 5200000,
+      is_active: false,
+    }),
+  });
+  assert.equal(updMgr.status, 200);
+  assert.equal(updMgr.json.employee.full_name, 'E2E Managed Updated');
+  assert.equal(updMgr.json.employee.base_salary, '5200000');
+  assert.equal(updMgr.json.employee.is_active, false);
+
+  const reactivateMgr = await apiJson(`/api/rbac/employees/${mgrEmpId}`, ownerJwt, {
+    method: 'PATCH',
+    body: JSON.stringify({ is_active: true }),
+  });
+  assert.equal(reactivateMgr.status, 200);
+  assert.equal(reactivateMgr.json.employee.is_active, true);
+
+  const selfDeact = await apiJson(`/api/rbac/employees/${ownerEmpId}`, ownerJwt, {
+    method: 'PATCH',
+    body: JSON.stringify({ is_active: false }),
+  });
+  assert.equal(selfDeact.status, 400, 'Owner cannot deactivate self');
+
+  const selfDel = await apiJson(`/api/rbac/employees/${ownerEmpId}`, ownerJwt, {
+    method: 'DELETE',
+  });
+  assert.equal(selfDel.status, 400, 'Owner cannot delete self');
+
+  const staffDel = await apiJson(`/api/rbac/employees/${mgrEmpId}`, staffJwt, {
+    method: 'DELETE',
+  });
+  assert.equal(staffDel.status, 403, 'Staff cannot delete employees');
+
+  // staffEmpId has operational history (clock-in attempt failed 400, wait: what has history? ownerEmpId is self, what about staffEmpId who called /api/me/username or payroll_items!).
+  // E2E payroll run included staffEmpId in payroll_items, so DELETE staffEmpId must return 409 can_deactivate: true!
+  const conflictDel = await apiJson(`/api/rbac/employees/${staffEmpId}`, ownerJwt, {
+    method: 'DELETE',
+  });
+  assert.equal(conflictDel.status, 409, 'Deleting employee with payroll history must return 409');
+  assert.equal(conflictDel.json.can_deactivate, true);
+
+  const cleanDel = await apiJson(`/api/rbac/employees/${mgrEmpId}`, ownerJwt, {
+    method: 'DELETE',
+  });
+  assert.equal(cleanDel.status, 200, 'Clean employee without history must delete cleanly');
+  assert.equal(cleanDel.json.mode, 'deleted');
+  console.log('[PASS] Owner Employee CRUD + conflict 409 + self/RBAC guards verified');
+
+  // 13. App Version, Changelog & Update Check + Owner Release Guards
+  const verOutdated = await apiJson(
+    '/api/app/version?platform=android&current_version=1.0.0&current_build=1',
+    null,
+  );
+  assert.equal(verOutdated.status, 200);
+  assert.equal(verOutdated.json.has_update, true, 'Outdated client build=1 must receive has_update=true');
+  assert.ok(
+    Array.isArray(verOutdated.json.pending_releases) && verOutdated.json.pending_releases.length >= 2,
+    'Outdated client build=1 must receive pending releases',
+  );
+
+  const verCurrent = await apiJson(
+    '/api/app/version?platform=android&current_version=1.2.0&current_build=3',
+    null,
+  );
+  assert.equal(verCurrent.status, 200);
+  assert.equal(verCurrent.json.has_update, false, 'Current client build=3 must have has_update=false');
+
+  const webChangelog = await apiJson('/api/app/changelog?platform=web', null);
+  assert.equal(webChangelog.status, 200);
+  assert.ok(
+    Array.isArray(webChangelog.json.releases) && webChangelog.json.releases.length >= 3,
+    'Public changelog must return seeded releases',
+  );
+
+  const staffPub = await apiJson('/api/app/releases', staffJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      platform: 'web',
+      version: '9.9.8',
+      build_number: 99998,
+      title: 'Unauthorized Release',
+      changelog: ['Should fail'],
+    }),
+  });
+  assert.equal(staffPub.status, 403, 'Staff cannot publish app releases');
+
+  const e2eBuildNumber = 90000 + (ts % 9000);
+  const ownerPub = await apiJson('/api/app/releases', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      platform: 'web',
+      version: '9.9.9',
+      build_number: e2eBuildNumber,
+      title: `E2E Test Release ${ts}`,
+      changelog: ['Pembaruan uji E2E otomatis'],
+      download_url: 'https://my.ekalliptus.com',
+    }),
+  });
+  assert.equal(ownerPub.status, 201, 'Owner publish release must succeed');
+  const tmpReleaseId = ownerPub.json.release.id;
+  createdReleaseIds.push(tmpReleaseId);
+
+  const verAfterPub = await apiJson(
+    '/api/app/version?platform=web&current_version=1.2.0&current_build=3',
+    null,
+  );
+  assert.equal(verAfterPub.status, 200);
+  assert.equal(verAfterPub.json.has_update, true);
+  assert.equal(verAfterPub.json.latest.version, '9.9.9');
+
+  const delRelease = await apiJson(`/api/app/releases/${tmpReleaseId}`, ownerJwt, {
+    method: 'DELETE',
+  });
+  assert.equal(delRelease.status, 200);
+
+  const dlRes = await fetch(`${API_BASE}/api/app/download/android`, {
+    method: 'GET',
+    redirect: 'manual',
+    headers: { 'X-Platform': 'web' },
+  });
+  assert.equal(dlRes.status, 302, 'GET /api/app/download/android must redirect 302 to S3 presigned URL');
+  const dlLoc = dlRes.headers.get('location') || '';
+  assert.ok(dlLoc.startsWith('http'), 'APK redirect Location header must be an HTTP URL');
+  const s3Get = await fetch(dlLoc, {
+    method: 'GET',
+    headers: { Range: 'bytes=0-15' },
+  });
+  assert.ok(
+    s3Get.status === 206 || s3Get.status === 200,
+    `Presigned Android APK download URL must respond 206/200 on GET (got ${s3Get.status})`,
+  );
+  const contentRange = s3Get.headers.get('content-range') || '';
+  const rangeTotalMatch = /\/(\d+)$/.exec(contentRange);
+  const apkLen = rangeTotalMatch
+    ? Number(rangeTotalMatch[1])
+    : Number(s3Get.headers.get('content-length') || '0');
+  await s3Get.arrayBuffer();
+  assert.ok(apkLen > 1000000, `Uploaded Android APK size must be > 1MB (got ${apkLen})`);
+  console.log(`[PASS] App Version, Changelog, Update Check, APK Download (${(apkLen / (1024 * 1024)).toFixed(2)} MB) & Owner Guards verified`);
+
+  console.log('\nALL 5 NEON SERVICES + NOTIFICATIONS + OWNER CRUD + APP VERSION VERIFIED END-TO-END SUCCESSFULLY!');
 }
 
 async function cleanup() {
@@ -595,12 +1014,23 @@ async function cleanup() {
   }
 
   try {
+    if (createdReleaseIds.length > 0) {
+      await pool.query('DELETE FROM app_releases WHERE id = ANY($1::uuid[])', [createdReleaseIds]);
+    }
     if (createdPayrollRunIds.length > 0) {
       await pool.query('DELETE FROM payroll_items WHERE payroll_run_id = ANY($1::uuid[])', [
         createdPayrollRunIds,
       ]);
       await pool.query('DELETE FROM payroll_runs WHERE id = ANY($1::uuid[])', [
         createdPayrollRunIds,
+      ]);
+    }
+    if (createdPosSaleIds.length > 0) {
+      await pool.query('DELETE FROM pos_sale_items WHERE sale_id = ANY($1::uuid[])', [
+        createdPosSaleIds,
+      ]);
+      await pool.query('DELETE FROM pos_sales WHERE id = ANY($1::uuid[])', [
+        createdPosSaleIds,
       ]);
     }
     if (createdItemIds.length > 0) {

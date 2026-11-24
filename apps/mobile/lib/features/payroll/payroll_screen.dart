@@ -23,10 +23,13 @@ class _PayrollScreenState extends ConsumerState<PayrollScreen> {
 
   bool _unlocked = false;
   bool _loading = true;
+  bool _switchingRun = false;
   bool _loadingMore = false;
   int _visibleCount = _batchSize;
+  int _observedVersion = 0;
   Timer? _moreTimer;
   String? _error;
+  String? _selectedRunId;
   List<dynamic> _runs = const [];
   Map<String, dynamic>? _selectedDetail;
   List<dynamic> _accounts = const [];
@@ -34,6 +37,7 @@ class _PayrollScreenState extends ConsumerState<PayrollScreen> {
   @override
   void initState() {
     super.initState();
+    _observedVersion = ref.read(erpDataVersionProvider);
     _unlockAndLoad();
   }
 
@@ -43,20 +47,20 @@ class _PayrollScreenState extends ConsumerState<PayrollScreen> {
     super.dispose();
   }
 
-  void _scheduleLoadMore(int total) {
-    if (_loadingMore || _visibleCount >= total) return;
-    setState(() => _loadingMore = true);
-    _moreTimer?.cancel();
-    _moreTimer = Timer(const Duration(milliseconds: 220), () {
-      if (!mounted) return;
-      setState(() {
-        _visibleCount += _batchSize;
-        _loadingMore = false;
-      });
-    });
+  void _emitMutationSuccess() {
+    final next = ref.read(erpDataVersionProvider) + 1;
+    _observedVersion = next;
+    ref.read(erpDataVersionProvider.notifier).state = next;
+    ref.invalidate(sessionProfileProvider);
   }
 
   Future<void> _unlockAndLoad() async {
+    if (isSensitiveSessionUnlocked(ref)) {
+      setState(() => _unlocked = true);
+      await _load();
+      return;
+    }
+
     final ok = await ref
         .read(biometricGuardProvider)
         .verifySensitiveAccess(reason: 'Buka modul Payroll MyEkalliptus');
@@ -69,6 +73,7 @@ class _PayrollScreenState extends ConsumerState<PayrollScreen> {
       });
       return;
     }
+    markSensitiveSessionUnlocked(ref);
     setState(() => _unlocked = true);
     await _load();
   }
@@ -81,21 +86,35 @@ class _PayrollScreenState extends ConsumerState<PayrollScreen> {
     try {
       final api = ref.read(apiClientProvider);
       final runs = await api.fetchPayrollRuns();
+
+      String? targetId = _selectedRunId;
+      final exists = targetId != null &&
+          runs.any((r) => (r as Map<String, dynamic>)['id'].toString() == targetId);
+      if (!exists) {
+        targetId = runs.isNotEmpty ? (runs.first as Map<String, dynamic>)['id'].toString() : null;
+      }
+
       Map<String, dynamic>? detail;
-      if (runs.isNotEmpty) {
-        final firstId = (runs.first as Map<String, dynamic>)['id'].toString();
-        detail = await api.fetchPayrollRunDetail(firstId);
+      if (targetId != null) {
+        detail = await api.fetchPayrollRunDetail(targetId);
       }
-      var accs = const <dynamic>[];
-      if (widget.profile.hasPermission('finance', 'view')) {
-        final fin = await api.fetchFinanceDashboard();
-        accs = (fin['accounts'] as List<dynamic>?) ?? const [];
+
+      List<dynamic> accounts = const [];
+      if (widget.profile.hasPermission('payroll', 'approve') &&
+          widget.profile.hasPermission('finance', 'view')) {
+        try {
+          accounts = await api.fetchFinanceAccounts();
+        } catch (_) {
+          accounts = const [];
+        }
       }
+
       if (mounted) {
         setState(() {
           _runs = runs;
+          _selectedRunId = targetId;
           _selectedDetail = detail;
-          _accounts = accs;
+          _accounts = accounts;
           _visibleCount = _batchSize;
           _loading = false;
         });
@@ -110,105 +129,198 @@ class _PayrollScreenState extends ConsumerState<PayrollScreen> {
     }
   }
 
-  void _openPaySheet(String runId, String totalDisbursed) {
+  Future<void> _selectRun(String runId) async {
+    if (runId == _selectedRunId || _switchingRun) return;
+    setState(() {
+      _selectedRunId = runId;
+      _switchingRun = true;
+    });
+    try {
+      final detail = await ref.read(apiClientProvider).fetchPayrollRunDetail(runId);
+      if (mounted) {
+        setState(() {
+          _selectedDetail = detail;
+          _visibleCount = _batchSize;
+          _switchingRun = false;
+        });
+      }
+    } catch (err) {
+      if (mounted) {
+        setState(() => _switchingRun = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err.toString())),
+        );
+      }
+    }
+  }
+
+  void _scheduleLoadMore(int totalLength) {
+    if (_loadingMore || _visibleCount >= totalLength) return;
+    _loadingMore = true;
+    _moreTimer?.cancel();
+    _moreTimer = Timer(const Duration(milliseconds: 220), () {
+      if (!mounted) return;
+      setState(() {
+        _visibleCount = (_visibleCount + _batchSize).clamp(0, totalLength);
+        _loadingMore = false;
+      });
+    });
+  }
+
+  Future<void> _approveDraft(Map<String, dynamic> run) async {
+    final runId = run['id'].toString();
+    final period =
+        '${formatShortDate(run['period_start']?.toString())} - ${formatShortDate(run['period_end']?.toString())}';
+    final ok = await showErpConfirmDialog(
+      context,
+      title: 'Setujui Payroll Draft?',
+      message:
+          'Periode $period senilai ${formatRupiah(run['total_disbursed'])} akan disetujui agar siap dibayarkan.',
+      confirmLabel: 'Setujui Draft',
+    );
+    if (!ok || !mounted) return;
+    try {
+      await ref.read(apiClientProvider).approvePayrollRun(runId);
+      _emitMutationSuccess();
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Payroll draft berhasil disetujui.')),
+        );
+      }
+    } catch (err) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err.toString())),
+        );
+      }
+    }
+  }
+
+  Future<void> _openPaySheet(Map<String, dynamic> run) async {
     if (_accounts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Rekening kas tidak tersedia.')),
+        const SnackBar(content: Text('Rekening kas belum tersedia atau izin finance:view diperlukan.')),
       );
       return;
     }
-    var accId = (_accounts.first as Map<String, dynamic>)['id'].toString();
-    showModalBottomSheet<void>(
+
+    final paid = await showModalBottomSheet<bool>(
       context: context,
+      useRootNavigator: true,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            return Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text('Bayar Payroll', style: Theme.of(ctx).textTheme.titleLarge),
-                  const SizedBox(height: 6),
-                  Text('Total dicairkan: ${formatRupiah(totalDisbursed)}'),
-                  const SizedBox(height: 14),
-                  DropdownButtonFormField<String>(
-                    initialValue: accId,
-                    decoration: const InputDecoration(labelText: 'Rekening Sumber Kas'),
-                    items: [
-                      for (final a in _accounts)
-                        DropdownMenuItem(
-                          value: (a as Map<String, dynamic>)['id'].toString(),
-                          child: Text('${a['name']} (${formatRupiah(a['balance'])})'),
-                        ),
-                    ],
-                    onChanged: (v) => setModalState(() => accId = v ?? accId),
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton(
-                    onPressed: () async {
-                      try {
-                        await ref.read(apiClientProvider).payPayrollRun(runId, accId);
-                        if (ctx.mounted) Navigator.of(ctx).pop();
-                        await _load();
-                      } catch (err) {
-                        if (ctx.mounted) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                            SnackBar(content: Text(err.toString())),
-                          );
-                        }
-                      }
-                    },
-                    child: const Text('Cairkan & Posting Keuangan'),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+      builder: (_) => _PayPayrollSheet(
+        run: run,
+        accounts: _accounts,
+      ),
     );
+
+    if (paid == true && mounted) {
+      _emitMutationSuccess();
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Payroll dibayarkan & slip PDF diterbitkan.')),
+        );
+      }
+    }
   }
 
-  Future<void> _showSlipUrlDialog(String itemId) async {
+  Future<void> _showSlipUrlDialog(Map<String, dynamic> item) async {
     try {
-      final url = await ref.read(apiClientProvider).fetchPayrollSlipUrl(itemId);
+      final url = await ref.read(apiClientProvider).fetchPayrollSlipUrl(item['id'].toString());
       if (!mounted) return;
-      await showDialog<void>(
+      await showModalBottomSheet<void>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Tautan Slip Gaji PDF'),
-          content: SelectableText(url),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: url));
-                Navigator.of(ctx).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('URL Slip Gaji PDF disalin ke clipboard.')),
-                );
-              },
-              child: const Text('Salin URL'),
+        useRootNavigator: true,
+        isScrollControlled: true,
+        useSafeArea: true,
+        builder: (ctx) {
+          final t = EucalyptusTokens.of(ctx);
+          return ErpBottomSheetFrame(
+            title: '${item['full_name']} (${item['employee_code']})',
+            subtitle: 'Tautan unduh resmi slip gaji PDF MyEkalliptus',
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: t.surfaceSubtle,
+                    borderRadius: BorderRadius.circular(t.radiusMd),
+                    border: Border.all(color: t.border),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Gaji Bersih', style: Theme.of(ctx).textTheme.bodySmall),
+                      const SizedBox(height: 4),
+                      Text(
+                        formatRupiah(item['net_salary']),
+                        style: AppTheme.monoNumeric(
+                          color: t.textPrimary,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SelectableText(
+                        url,
+                        style: Theme.of(ctx).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        child: const Text('Tutup'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: url));
+                          Navigator.of(ctx).pop();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Tautan slip PDF disalin ke clipboard.')),
+                          );
+                        },
+                        icon: const Icon(Icons.copy, size: 18),
+                        label: const Text('Salin Tautan'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Tutup'),
-            ),
-          ],
-        ),
+          );
+        },
       );
     } catch (err) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err.toString())));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err.toString())),
+        );
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(erpDataVersionProvider, (prev, next) {
+      if (next != _observedVersion && mounted && _unlocked) {
+        _observedVersion = next;
+        _load();
+      }
+    });
+
     final t = EucalyptusTokens.of(context);
     if (!widget.profile.hasPermission('payroll', 'view')) {
       return const Padding(
@@ -252,6 +364,7 @@ class _PayrollScreenState extends ConsumerState<PayrollScreen> {
     final runId = run['id'].toString();
     final shownCount = items.length < _visibleCount ? items.length : _visibleCount;
     final hasMore = shownCount < items.length;
+    final canApprove = widget.profile.hasPermission('payroll', 'approve');
 
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
@@ -265,109 +378,260 @@ class _PayrollScreenState extends ConsumerState<PayrollScreen> {
         child: CustomScrollView(
           slivers: [
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
               sliver: SliverToBoxAdapter(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    '${formatShortDate(run['period_start']?.toString())} - ${formatShortDate(run['period_end']?.toString())}',
-                                    style: Theme.of(context).textTheme.titleMedium,
+                    ErpFilterPillBar<String>(
+                      selected: runId,
+                      onSelected: _selectRun,
+                      options: [
+                        for (final rawRun in _runs)
+                          ErpFilterPillOption(
+                            value: (rawRun as Map<String, dynamic>)['id'].toString(),
+                            label:
+                                '${formatShortDate(rawRun['period_start']?.toString())} - ${formatShortDate(rawRun['period_end']?.toString())}',
+                          ),
+                      ],
+                    ),
+                    if (_switchingRun) ...[
+                      const SizedBox(height: 8),
+                      const LinearProgressIndicator(minHeight: 2),
+                    ],
+                    const SizedBox(height: 12),
+
+                    ErpHeroCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${formatShortDate(run['period_start']?.toString())} - ${formatShortDate(run['period_end']?.toString())}',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFFCCFBF1),
                                   ),
                                 ),
-                                ErpBadge(
-                                  label: runStatus.toUpperCase(),
-                                  tone: runStatus == 'paid'
-                                      ? ErpBadgeTone.success
-                                      : runStatus == 'approved'
-                                          ? ErpBadgeTone.info
-                                          : ErpBadgeTone.warning,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              formatRupiah(run['total_disbursed']),
-                              style: AppTheme.monoNumeric(color: t.textPrimary, fontSize: 22),
-                            ),
-                            if (widget.profile.hasPermission('payroll', 'approve')) ...[
-                              const SizedBox(height: 12),
-                              if (runStatus == 'draft')
-                                FilledButton(
-                                  onPressed: () async {
-                                    await ref.read(apiClientProvider).approvePayrollRun(runId);
-                                    await _load();
-                                  },
-                                  child: const Text('Setujui Payroll Draft'),
-                                ),
-                              if (runStatus == 'approved')
-                                FilledButton(
-                                  onPressed: () =>
-                                      _openPaySheet(runId, (run['total_disbursed'] ?? '0').toString()),
-                                  child: const Text('Bayar & Terbitkan Slip PDF'),
-                                ),
+                              ),
+                              ErpBadge(
+                                label: runStatus.toUpperCase(),
+                                tone: runStatus == 'paid'
+                                    ? ErpBadgeTone.success
+                                    : runStatus == 'approved'
+                                        ? ErpBadgeTone.info
+                                        : ErpBadgeTone.warning,
+                              ),
                             ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            formatRupiah(run['total_disbursed']),
+                            style: AppTheme.monoNumeric(
+                              color: Colors.white,
+                              fontSize: 28,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            '${items.length} slip karyawan pada periode terpilih',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFFCCFBF1),
+                            ),
+                          ),
+                          if (canApprove && (runStatus == 'draft' || runStatus == 'approved')) ...[
+                            const SizedBox(height: 14),
+                            if (runStatus == 'draft')
+                              FilledButton.icon(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: Colors.white,
+                                  foregroundColor: const Color(0xFF064E3B),
+                                ),
+                                onPressed: () => _approveDraft(run),
+                                icon: const Icon(Icons.verified_outlined, size: 18),
+                                label: const Text('Setujui Payroll Draft'),
+                              ),
+                            if (runStatus == 'approved')
+                              FilledButton.icon(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: Colors.white,
+                                  foregroundColor: const Color(0xFF064E3B),
+                                ),
+                                onPressed: () => _openPaySheet(run),
+                                icon: const Icon(Icons.payments_outlined, size: 18),
+                                label: const Text('Bayar & Terbitkan Slip PDF'),
+                              ),
                           ],
-                        ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Text('Rincian Slip Karyawan', style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      'Rincian Slip Karyawan (${items.length})',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const SizedBox(height: 8),
                   ],
                 ),
               ),
             ),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-              sliver: SliverList.builder(
-                itemCount: shownCount + (hasMore ? 1 : 0),
-                itemBuilder: (ctx, index) {
-                  if (index >= shownCount) {
-                    return const LazyListShimmerFooter(
-                      label: 'Memuat slip karyawan berikutnya...',
-                    );
-                  }
-                  final it = items[index] as Map<String, dynamic>;
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Card(
-                      child: ListTile(
-                        title: Text('${it['full_name']} (${it['employee_code']})'),
-                        subtitle: Text(
-                          'Pokok ${formatRupiah(it['base_salary'])} | Lembur ${formatRupiah(it['overtime_pay'])}',
-                        ),
+            if (items.isEmpty)
+              const SliverPadding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 108),
+                sliver: SliverToBoxAdapter(
+                  child: ErpEmptyCard(
+                    title: 'Belum ada rincian slip',
+                    description: 'Periode ini belum memiliki item gaji yang dapat Anda lihat.',
+                  ),
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 108),
+                sliver: SliverList.builder(
+                  itemCount: shownCount + (hasMore ? 1 : 0),
+                  itemBuilder: (ctx, index) {
+                    if (index >= shownCount) {
+                      return const LazyListShimmerFooter(
+                        label: 'Memuat slip karyawan berikutnya...',
+                      );
+                    }
+                    final it = items[index] as Map<String, dynamic>;
+                    final hasPdf = it['slip_pdf_object_key'] != null;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: ErpListRowCard(
+                        leadingIcon: Icons.receipt_long_outlined,
+                        leadingColor: hasPdf ? t.success : t.accent,
+                        leadingBackground: hasPdf ? t.successSoft : t.accentSoft,
+                        title: '${it['full_name']} (${it['employee_code']})',
+                        subtitle:
+                            'Pokok ${formatRupiah(it['base_salary'])} · Lembur ${formatRupiah(it['overtime_pay'])}',
                         trailing: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             Text(
                               formatRupiah(it['net_salary']),
-                              style: AppTheme.monoNumeric(color: t.textPrimary, fontSize: 13),
+                              style: AppTheme.monoNumeric(
+                                color: t.textPrimary,
+                                fontSize: 13.5,
+                              ),
                             ),
-                            const SizedBox(height: 2),
-                            Text('Ketuk lihat Slip', style: Theme.of(ctx).textTheme.bodySmall),
+                            const SizedBox(height: 4),
+                            ErpBadge(
+                              label: hasPdf ? 'Slip PDF' : 'Tautan Slip',
+                              tone: hasPdf ? ErpBadgeTone.success : ErpBadgeTone.accent,
+                            ),
                           ],
                         ),
-                        onTap: () => _showSlipUrlDialog(it['id'].toString()),
+                        onTap: () => _showSlipUrlDialog(it),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
-            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PayPayrollSheet extends ConsumerStatefulWidget {
+  final Map<String, dynamic> run;
+  final List<dynamic> accounts;
+
+  const _PayPayrollSheet({
+    required this.run,
+    required this.accounts,
+  });
+
+  @override
+  ConsumerState<_PayPayrollSheet> createState() => _PayPayrollSheetState();
+}
+
+class _PayPayrollSheetState extends ConsumerState<_PayPayrollSheet> {
+  late String _accId;
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _accId = (widget.accounts.first as Map<String, dynamic>)['id'].toString();
+  }
+
+  Future<void> _submit() async {
+    final total = formatRupiah(widget.run['total_disbursed']);
+    final ok = await showErpConfirmDialog(
+      context,
+      title: 'Konfirmasi Pencairan Payroll?',
+      message:
+          'Total $total akan didebit dari rekening terpilih dan seluruh slip gaji PDF diterbitkan.',
+      confirmLabel: 'Bayar Sekarang',
+    );
+    if (!ok || !mounted) return;
+
+    setState(() => _submitting = true);
+    try {
+      await ref
+          .read(apiClientProvider)
+          .payPayrollRun(widget.run['id'].toString(), _accId);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (err) {
+      if (mounted) {
+        setState(() => _submitting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err.toString())),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ErpBottomSheetFrame(
+      title: 'Bayar & Terbitkan Slip Payroll',
+      subtitle:
+          'Periode ${formatShortDate(widget.run['period_start']?.toString())} - ${formatShortDate(widget.run['period_end']?.toString())}',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Total Disbursed: ${formatRupiah(widget.run['total_disbursed'])}',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 14),
+          DropdownButtonFormField<String>(
+            initialValue: _accId,
+            decoration: const InputDecoration(labelText: 'Rekening Pembayaran'),
+            items: [
+              for (final a in widget.accounts)
+                DropdownMenuItem(
+                  value: (a as Map<String, dynamic>)['id'].toString(),
+                  child: Text(
+                    '${a['name']} (${formatRupiah(a['balance'])})',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: (v) {
+              if (v != null) setState(() => _accId = v);
+            },
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: _submitting ? null : _submit,
+            child: Text(_submitting ? 'Memproses Pembayaran...' : 'Konfirmasi Bayar Payroll'),
+          ),
+        ],
       ),
     );
   }

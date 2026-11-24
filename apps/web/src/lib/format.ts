@@ -76,3 +76,11 @@ export function downloadCsv(
   link.click();
   URL.revokeObjectURL(url);
 }
+
+export function formatPlatformLabel(platform: string | null | undefined): string {
+  const normalized = (platform ?? '').trim().toLowerCase();
+  if (normalized === 'flutter' || normalized === 'android') return 'ANDROID';
+  if (normalized === 'web') return 'WEB';
+  if (normalized === 'system') return 'SYSTEM';
+  return normalized ? normalized.toUpperCase() : '-';
+}

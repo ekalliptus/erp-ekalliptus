@@ -1,8 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, CheckCheck } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { erpApi, type NotificationItem } from '../lib/api';
-import { enableWebNotifications, notificationSupported } from '../lib/notifications';
+import {
+  enableWebNotifications,
+  notificationSupported,
+  onForegroundMessage,
+} from '../lib/notifications';
 import { CardListSkeleton } from './Skeleton';
 import { EmptyState, ErrorState } from './StateViews';
 import { SlideOver } from './SlideOver';
@@ -12,6 +16,7 @@ const MODULE_LABEL: Record<string, string> = {
   inventory: 'Stok',
   attendance: 'Absensi',
   payroll: 'Gaji',
+  app_update: 'Pembaruan',
 };
 
 function formatTime(value: string): string {
@@ -24,6 +29,15 @@ function formatTime(value: string): string {
 export function NotificationsBell() {
   const [open, setOpen] = useState(false);
   const qc = useQueryClient();
+
+  useEffect(() => {
+    return onForegroundMessage((payload) => {
+      void qc.invalidateQueries({ queryKey: ['notifications'] });
+      if (payload.data?.module === 'app_update') {
+        void qc.invalidateQueries({ queryKey: ['app', 'version'] });
+      }
+    });
+  }, [qc]);
   const unread = useQuery({
     queryKey: ['notifications', 'unread'],
     queryFn: () => erpApi.notifications.unreadCount(),
@@ -72,7 +86,7 @@ export function NotificationsBell() {
         open={open}
         onClose={() => setOpen(false)}
         title="Notifikasi"
-        subtitle="Aktivitas kas, stok, absensi, dan gaji yang menyentuh Anda."
+        subtitle="Aktivitas kas, stok, absensi, gaji, dan pembaruan aplikasi."
       >
         <div className="flex h-full flex-col gap-3">
           {canEnablePush && (

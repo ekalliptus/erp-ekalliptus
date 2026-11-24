@@ -1,8 +1,9 @@
 import { hasPermission, sealRealtimeSchema } from '@ekalliptus/contracts';
 import { erp_events } from '@ekalliptus/db';
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { getDb, jsonSafe } from '../db.js';
+import { canViewAllEmployeesData } from '../services/security-policy.js';
 import {
   attendancesLiveQuery,
   erpEventsLiveQuery,
@@ -52,8 +53,11 @@ router.post('/seal', async (c) => {
   if (!hasPermission(auth.permissions, 'attendance', 'view')) {
     return c.json({ error: 'Forbidden: attendance:view required.' }, 403);
   }
+  const scopedEmployeeId = canViewAllEmployeesData(auth.roleCode) ? undefined : auth.employee.id;
   const query =
-    feed === 'erp:attendance' ? erpEventsLiveQuery('erp:attendance') : attendancesLiveQuery();
+    feed === 'erp:attendance'
+      ? erpEventsLiveQuery('erp:attendance', scopedEmployeeId)
+      : attendancesLiveQuery(scopedEmployeeId);
   const sealed = await rt.seal({ query });
   return c.json(sealed);
 });
@@ -75,6 +79,11 @@ router.get('/events', async (c) => {
     return c.json({ error: `Forbidden: ${requiredModule}:view required.` }, 403);
   }
 
+  const scopedEmployeeId =
+    channel === 'erp:attendance' && !canViewAllEmployeesData(auth.roleCode)
+      ? auth.employee.id
+      : undefined;
+
   const db = getDb();
   let lastId = BigInt(c.req.query('after_id') || '0');
   const encoder = new TextEncoder();
@@ -95,10 +104,14 @@ router.get('/events', async (c) => {
       const poll = async () => {
         if (closed) return;
         try {
+          const conditions = [eq(erp_events.channel, channel), gt(erp_events.id, lastId)];
+          if (scopedEmployeeId) {
+            conditions.push(sql`${erp_events.payload}->>'employee_id' = ${scopedEmployeeId}`);
+          }
           const rows = await db
             .select()
             .from(erp_events)
-            .where(and(eq(erp_events.channel, channel), gt(erp_events.id, lastId)))
+            .where(and(...conditions))
             .orderBy(erp_events.id)
             .limit(50);
 

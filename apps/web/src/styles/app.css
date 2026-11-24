@@ -1,5 +1,6 @@
 @import "./tokens.css";
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   --ep-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -51,6 +52,10 @@
 }
 
 /* Native View Transitions API full-viewport theme reveal */
+::view-transition-group(root) {
+  animation: none;
+}
+
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;
@@ -63,6 +68,14 @@
 
 ::view-transition-new(root) {
   z-index: 9999;
+  will-change: clip-path;
+}
+
+/* Freeze only active transition elements during snapshot/reveal without wildcard DOM invalidation */
+html.ep-theme-switching .ep-theme-toggle,
+html.ep-theme-switching .ep-theme-icon,
+html.ep-theme-switching .transition-colors {
+  transition: none !important;
 }
 
 /* Named color fallback only while switching theme in browsers without View Transitions */
@@ -81,10 +94,7 @@ html.ep-theme-fallback input {
 }
 
 .ep-theme-toggle {
-  transition:
-    transform 120ms var(--ep-ease-out),
-    background-color 180ms ease,
-    border-color 180ms ease;
+  transition: transform 120ms var(--ep-ease-out);
 }
 
 .ep-theme-toggle:active:not(:disabled) {
@@ -93,8 +103,8 @@ html.ep-theme-fallback input {
 
 .ep-theme-icon {
   transition:
-    transform 220ms var(--ep-ease-out),
-    opacity 220ms var(--ep-ease-out);
+    transform 260ms var(--ep-ease-out),
+    opacity 260ms var(--ep-ease-out);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -158,16 +168,42 @@ html.ep-theme-fallback input {
     transform: none;
   }
 
-  .ep-theme-icon {
-    transition: opacity 180ms ease-out;
-  }
-
-  *,
+  *:not(.ep-theme-toggle):not(.ep-theme-icon),
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  .ep-theme-icon {
+    transition:
+      transform 260ms var(--ep-ease-out),
+      opacity 260ms var(--ep-ease-out);
+  }
+}
+
+@media print {
+  body.ep-printing-receipt * {
+    visibility: hidden !important;
+  }
+
+  body.ep-printing-receipt .pos-receipt-print,
+  body.ep-printing-receipt .pos-receipt-print * {
+    visibility: visible !important;
+  }
+
+  body.ep-printing-receipt .pos-receipt-print {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 80mm;
+    max-width: 100%;
+    padding: 12px;
+    background: #ffffff !important;
+    color: #111827 !important;
+    border: none !important;
+    box-shadow: none !important;
   }
 }

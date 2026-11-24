@@ -62,6 +62,9 @@ export const employees = pgTable('employees', {
   base_salary: bigint('base_salary', { mode: 'bigint' }).notNull().default(sql`0`),
   is_active: boolean('is_active').notNull().default(true),
   avatar_object_key: text('avatar_object_key'),
+  face_descriptors: jsonb('face_descriptors'),
+  face_reference_selfie_key: text('face_reference_selfie_key'),
+  face_enrolled_at: timestamp('face_enrolled_at', { withTimezone: true }),
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -273,8 +276,16 @@ export const attendances = pgTable(
     clock_out_at: timestamp('clock_out_at', { withTimezone: true }),
     clock_in_lat: doublePrecision('clock_in_lat'),
     clock_in_lng: doublePrecision('clock_in_lng'),
+    clock_out_lat: doublePrecision('clock_out_lat'),
+    clock_out_lng: doublePrecision('clock_out_lng'),
     clock_in_selfie_key: text('clock_in_selfie_key'),
     clock_out_selfie_key: text('clock_out_selfie_key'),
+    clock_in_method: text('clock_in_method'),
+    clock_out_method: text('clock_out_method'),
+    clock_in_ip: text('clock_in_ip'),
+    clock_out_ip: text('clock_out_ip'),
+    clock_in_device: jsonb('clock_in_device'),
+    clock_out_device: jsonb('clock_out_device'),
     status: text('status').notNull().default('present'),
     late_minutes: integer('late_minutes').notNull().default(0),
     overtime_minutes: integer('overtime_minutes').notNull().default(0),
@@ -417,5 +428,101 @@ export const notifications = pgTable(
     index('notifications_recipient_unread_idx')
       .on(table.recipient_auth_user_id)
       .where(sql`read_at IS NULL`),
+  ],
+);
+
+export const app_releases = pgTable(
+  'app_releases',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    platform: text('platform').notNull(),
+    version: text('version').notNull(),
+    build_number: integer('build_number').notNull(),
+    title: text('title').notNull(),
+    changelog: jsonb('changelog').$type<string[]>().notNull(),
+    download_url: text('download_url'),
+    file_object_key: text('file_object_key'),
+    file_size_bytes: bigint('file_size_bytes', { mode: 'bigint' }),
+    is_mandatory: boolean('is_mandatory').notNull().default(false),
+    is_published: boolean('is_published').notNull().default(true),
+    published_at: timestamp('published_at', { withTimezone: true }).notNull().defaultNow(),
+    created_by: uuid('created_by').references(() => employees.id, { onDelete: 'set null' }),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique('app_releases_platform_build_uq').on(table.platform, table.build_number),
+    index('app_releases_platform_published_idx').on(table.platform, table.build_number.desc()),
+    check('app_releases_platform_chk', sql`platform IN ('android', 'web')`),
+  ],
+);
+
+export const pos_sales = pgTable(
+  'pos_sales',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sale_number: text('sale_number').notNull().unique(),
+    warehouse_id: uuid('warehouse_id').references(() => warehouses.id),
+    account_id: uuid('account_id')
+      .notNull()
+      .references(() => finance_accounts.id),
+    finance_transaction_id: uuid('finance_transaction_id').references(() => finance_transactions.id),
+    cashier_id: uuid('cashier_id')
+      .notNull()
+      .references(() => employees.id),
+    customer_name: text('customer_name'),
+    payment_method: text('payment_method').notNull(),
+    subtotal: bigint('subtotal', { mode: 'bigint' }).notNull(),
+    discount_type: text('discount_type').notNull().default('none'),
+    discount_value: bigint('discount_value', { mode: 'bigint' }).notNull().default(sql`0`),
+    discount_amount: bigint('discount_amount', { mode: 'bigint' }).notNull().default(sql`0`),
+    tax_percent: integer('tax_percent').notNull().default(0),
+    tax_amount: bigint('tax_amount', { mode: 'bigint' }).notNull().default(sql`0`),
+    total_amount: bigint('total_amount', { mode: 'bigint' }).notNull(),
+    paid_amount: bigint('paid_amount', { mode: 'bigint' }).notNull(),
+    change_amount: bigint('change_amount', { mode: 'bigint' }).notNull().default(sql`0`),
+    status: text('status').notNull().default('completed'),
+    note: text('note'),
+    receipt_pdf_object_key: text('receipt_pdf_object_key'),
+    voided_by: uuid('voided_by').references(() => employees.id),
+    voided_at: timestamp('voided_at', { withTimezone: true }),
+    void_reason: text('void_reason'),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('pos_sales_created_idx').on(table.created_at.desc()),
+    index('pos_sales_cashier_idx').on(table.cashier_id),
+    check(
+      'pos_sales_payment_method_chk',
+      sql`payment_method IN ('cash', 'qris', 'transfer', 'ewallet')`,
+    ),
+    check('pos_sales_discount_type_chk', sql`discount_type IN ('none', 'amount', 'percent')`),
+    check('pos_sales_status_chk', sql`status IN ('completed', 'void')`),
+    check('pos_sales_total_pos_chk', sql`total_amount > 0`),
+    check('pos_sales_paid_ge_total_chk', sql`paid_amount >= total_amount`),
+    check('pos_sales_tax_percent_chk', sql`tax_percent >= 0 AND tax_percent <= 100`),
+  ],
+);
+
+export const pos_sale_items = pgTable(
+  'pos_sale_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sale_id: uuid('sale_id')
+      .notNull()
+      .references(() => pos_sales.id, { onDelete: 'cascade' }),
+    inventory_item_id: uuid('inventory_item_id').references(() => inventory_items.id),
+    sku: text('sku'),
+    item_name: text('item_name').notNull(),
+    unit: text('unit').notNull().default('pcs'),
+    qty: integer('qty').notNull(),
+    unit_price: bigint('unit_price', { mode: 'bigint' }).notNull(),
+    unit_cost: bigint('unit_cost', { mode: 'bigint' }).notNull().default(sql`0`),
+    line_total: bigint('line_total', { mode: 'bigint' }).notNull(),
+  },
+  (table) => [
+    index('pos_sale_items_sale_idx').on(table.sale_id),
+    check('pos_sale_items_qty_pos_chk', sql`qty > 0`),
+    check('pos_sale_items_unit_price_pos_chk', sql`unit_price > 0`),
+    check('pos_sale_items_line_total_pos_chk', sql`line_total > 0`),
   ],
 );

@@ -75,6 +75,7 @@ async function getAccessToken(): Promise<string> {
       grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
       assertion,
     }),
+    signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -93,6 +94,7 @@ export interface FcmPayload {
   title: string;
   body: string;
   data: Record<string, string>;
+  link?: string;
 }
 
 export interface FcmSendResult {
@@ -129,17 +131,29 @@ export async function sendFcmToTokens(
               token,
               notification: { title: payload.title, body: payload.body },
               data: payload.data,
-              android: { priority: 'HIGH' },
-              webpush: { headers: { Urgency: 'high' } },
+              android: {
+                priority: 'HIGH',
+                notification: { sound: 'default' },
+              },
+              webpush: {
+                headers: { Urgency: 'high' },
+                ...(payload.link ? { fcm_options: { link: payload.link } } : {}),
+              },
             },
           }),
+          signal: AbortSignal.timeout(8000),
         });
         if (res.ok) {
           result.sent += 1;
           return;
         }
         const text = await res.text().catch(() => '');
-        if (res.status === 404 || res.status === 410) {
+        if (
+          res.status === 404 ||
+          res.status === 410 ||
+          (res.status === 400 &&
+            (text.includes('UNREGISTERED') || text.includes('not a valid FCM registration token')))
+        ) {
           result.deadTokens.push(token);
           return;
         }

@@ -1,7 +1,7 @@
 name: ekalliptus_erp_mobile
 description: Ekalliptus ERP native client synchronized with Neon infrastructure and Eucalyptus Precision tokens.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.3.3+7
 
 environment:
   sdk: ">=3.6.0 <4.0.0"
@@ -21,6 +21,8 @@ dependencies:
   mobile_scanner: ^7.0.0
   local_auth: ^2.3.0
   flutter_secure_storage: ^9.2.4
+  flutter_map: ^8.2.2
+  latlong2: ^0.9.1
   intl: ^0.20.2
   firebase_core: ^3.13.1
   firebase_messaging: ^15.2.1

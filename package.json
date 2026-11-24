@@ -17,6 +17,7 @@
     "build:contracts": "tsc -p packages/contracts/tsconfig.json --noEmit",
     "build:api": "tsc -p functions/erpapi/tsconfig.json --noEmit",
     "build:web": "npm run build --workspace=apps/web",
+    "build:apk": "cd apps/mobile && flutter build apk --release --target-platform android-arm64,android-arm --obfuscate --split-debug-info=build/app/outputs/symbols",
     "build": "npm run tokens:sync && npm run build:db && npm run build:contracts && npm run build:api && npm run build:web",
     "deploy:neon": "neon deploy --env .env.local",
     "verify:e2e": "node scripts/verify-e2e.mjs"

@@ -2,12 +2,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/network/api_client.dart';
 import '../../core/providers/app_providers.dart';
 import '../../core/rbac/rbac_state.dart';
 import '../../core/theme/eucalyptus_theme.dart';
 import '../../core/utils/formatters.dart';
 import '../common/erp_widgets.dart';
 import '../common/shimmer_skeleton.dart';
+
+enum _InventoryFilter { all, lowStock, movements }
 
 class InventoryScreen extends ConsumerStatefulWidget {
   final ErpProfile profile;
@@ -21,37 +24,36 @@ class InventoryScreen extends ConsumerStatefulWidget {
 class _InventoryScreenState extends ConsumerState<InventoryScreen> {
   static const int _batchSize = 15;
 
+  final _searchCtrl = TextEditingController();
   bool _loading = true;
   bool _loadingMore = false;
   int _visibleCount = _batchSize;
+  int _observedVersion = 0;
   Timer? _moreTimer;
   String? _error;
-  Map<String, dynamic>? _data;
   String _search = '';
+  _InventoryFilter _filter = _InventoryFilter.all;
+  Map<String, dynamic>? _data;
 
   @override
   void initState() {
     super.initState();
+    _observedVersion = ref.read(erpDataVersionProvider);
     _load();
   }
 
   @override
   void dispose() {
     _moreTimer?.cancel();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
-  void _scheduleLoadMore(int total) {
-    if (_loadingMore || _visibleCount >= total) return;
-    setState(() => _loadingMore = true);
-    _moreTimer?.cancel();
-    _moreTimer = Timer(const Duration(milliseconds: 220), () {
-      if (!mounted) return;
-      setState(() {
-        _visibleCount += _batchSize;
-        _loadingMore = false;
-      });
-    });
+  void _emitMutationSuccess() {
+    final next = ref.read(erpDataVersionProvider) + 1;
+    _observedVersion = next;
+    ref.read(erpDataVersionProvider.notifier).state = next;
+    ref.invalidate(sessionProfileProvider);
   }
 
   Future<void> _load() async {
@@ -78,129 +80,107 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
     }
   }
 
-  void _openMovementSheet({String? preselectedItemId}) {
+  void _scheduleLoadMore(int totalLength) {
+    if (_loadingMore || _visibleCount >= totalLength) return;
+    _loadingMore = true;
+    _moreTimer?.cancel();
+    _moreTimer = Timer(const Duration(milliseconds: 220), () {
+      if (!mounted) return;
+      setState(() {
+        _visibleCount = (_visibleCount + _batchSize).clamp(0, totalLength);
+        _loadingMore = false;
+      });
+    });
+  }
+
+  Future<void> _openMovementSheet({
+    String? preselectedItemId,
+    String? preselectedWarehouseId,
+  }) async {
     final items = (_data?['items'] as List<dynamic>?) ?? const [];
     final warehouses = (_data?['warehouses'] as List<dynamic>?) ?? const [];
-    if (items.isEmpty || warehouses.isEmpty) return;
+    if (items.isEmpty || warehouses.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Item atau gudang belum tersedia untuk mutasi stok.'),
+        ),
+      );
+      return;
+    }
 
-    var itemId = preselectedItemId ?? (items.first as Map<String, dynamic>)['id'].toString();
-    var whId = (warehouses.first as Map<String, dynamic>)['id'].toString();
-    var mvType = 'in';
-    final qtyCtrl = TextEditingController(text: '1');
-    final noteCtrl = TextEditingController();
-
-    showModalBottomSheet<void>(
+    final result = await showModalBottomSheet<bool>(
       context: context,
+      useRootNavigator: true,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            return Padding(
-              padding: EdgeInsets.fromLTRB(
-                20,
-                20,
-                20,
-                20 + MediaQuery.of(ctx).viewInsets.bottom,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('Mutasi Stok Gudang', style: Theme.of(ctx).textTheme.titleLarge),
-                    const SizedBox(height: 14),
-                    DropdownButtonFormField<String>(
-                      initialValue: mvType,
-                      decoration: const InputDecoration(labelText: 'Tipe Mutasi'),
-                      items: const [
-                        DropdownMenuItem(value: 'in', child: Text('Stok Masuk (IN)')),
-                        DropdownMenuItem(value: 'out', child: Text('Stok Keluar (OUT)')),
-                        DropdownMenuItem(value: 'adjustment', child: Text('Adjustment (+/-)')),
-                      ],
-                      onChanged: (v) => setModalState(() => mvType = v ?? 'in'),
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      initialValue: itemId,
-                      decoration: const InputDecoration(labelText: 'Produk / SKU'),
-                      items: [
-                        for (final it in items)
-                          DropdownMenuItem(
-                            value: (it as Map<String, dynamic>)['id'].toString(),
-                            child: Text('${it['sku']} - ${it['name']}'),
-                          ),
-                      ],
-                      onChanged: (v) => setModalState(() => itemId = v ?? itemId),
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      initialValue: whId,
-                      decoration: const InputDecoration(labelText: 'Gudang'),
-                      items: [
-                        for (final w in warehouses)
-                          DropdownMenuItem(
-                            value: (w as Map<String, dynamic>)['id'].toString(),
-                            child: Text((w['name'] ?? '').toString()),
-                          ),
-                      ],
-                      onChanged: (v) => setModalState(() => whId = v ?? whId),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: qtyCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Jumlah Unit'),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: noteCtrl,
-                      decoration: const InputDecoration(labelText: 'Catatan (Opsional)'),
-                    ),
-                    const SizedBox(height: 16),
-                    FilledButton(
-                      onPressed: () async {
-                        final qty = int.tryParse(qtyCtrl.text.trim()) ?? 0;
-                        if (qty == 0) return;
-                        try {
-                          await ref.read(apiClientProvider).createStockMovement({
-                            'item_id': itemId,
-                            'warehouse_id': whId,
-                            'movement_type': mvType,
-                            'qty': qty,
-                            'note': noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
-                          });
-                          if (ctx.mounted) Navigator.of(ctx).pop();
-                          await _load();
-                        } catch (err) {
-                          if (ctx.mounted) {
-                            ScaffoldMessenger.of(ctx).showSnackBar(
-                              SnackBar(content: Text(err.toString())),
-                            );
-                          }
-                        }
-                      },
-                      child: const Text('Eksekusi Mutasi'),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
+      builder: (_) => _StockMovementSheet(
+        items: items,
+        warehouses: warehouses,
+        preselectedItemId: preselectedItemId,
+        preselectedWarehouseId: preselectedWarehouseId,
+      ),
     );
+
+    if (result == true && mounted) {
+      _emitMutationSuccess();
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Mutasi stok berhasil dicatat.')),
+        );
+      }
+    }
+  }
+
+  Future<void> _openCreateItemSheet() async {
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => const _CreateItemSheet(),
+    );
+
+    if (result == true && mounted) {
+      _emitMutationSuccess();
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Produk baru berhasil ditambahkan ke katalog.')),
+        );
+      }
+    }
+  }
+
+  IconData _movementIcon(String type) {
+    switch (type) {
+      case 'in':
+        return Icons.south_west_rounded;
+      case 'out':
+        return Icons.north_east_rounded;
+      case 'transfer':
+        return Icons.swap_horiz_rounded;
+      default:
+        return Icons.tune_rounded;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(erpDataVersionProvider, (prev, next) {
+      if (next != _observedVersion && mounted) {
+        _observedVersion = next;
+        _load();
+      }
+    });
+
     final t = EucalyptusTokens.of(context);
     if (!widget.profile.hasPermission('inventory', 'view')) {
       return const Padding(
         padding: EdgeInsets.all(20),
         child: ErpEmptyCard(
           title: 'Akses Inventaris Ditolak',
-          description: 'Role Anda tidak memiliki izin inventory:view.',
+          description: 'Role Anda belum memiliki izin inventory:view.',
         ),
       );
     }
@@ -214,22 +194,44 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
 
     final stocks = (_data?['stocks'] as List<dynamic>?) ?? const [];
     final items = (_data?['items'] as List<dynamic>?) ?? const [];
+    final movements = (_data?['movements'] as List<dynamic>?) ?? const [];
+    final canCreate = widget.profile.hasPermission('inventory', 'create');
+
+    final lowStockCount = stocks
+        .where((raw) => (raw as Map<String, dynamic>)['is_low_stock'] == true)
+        .length;
+
     final q = _search.trim().toLowerCase();
-    final filtered = stocks.where((raw) {
-      if (q.isEmpty) return true;
+    final filteredStocks = stocks.where((raw) {
       final m = raw as Map<String, dynamic>;
+      if (_filter == _InventoryFilter.lowStock && m['is_low_stock'] != true) {
+        return false;
+      }
+      if (q.isEmpty) return true;
       return (m['sku'] ?? '').toString().toLowerCase().contains(q) ||
           (m['barcode'] ?? '').toString().toLowerCase().contains(q) ||
-          (m['name'] ?? '').toString().toLowerCase().contains(q);
+          (m['name'] ?? '').toString().toLowerCase().contains(q) ||
+          (m['warehouse_name'] ?? '').toString().toLowerCase().contains(q);
     }).toList(growable: false);
 
-    final shownCount = filtered.length < _visibleCount ? filtered.length : _visibleCount;
-    final hasMore = shownCount < filtered.length;
+    final filteredMovements = movements.where((raw) {
+      if (q.isEmpty) return true;
+      final m = raw as Map<String, dynamic>;
+      return (m['item_name'] ?? '').toString().toLowerCase().contains(q) ||
+          (m['sku'] ?? '').toString().toLowerCase().contains(q) ||
+          (m['warehouse_name'] ?? '').toString().toLowerCase().contains(q) ||
+          (m['note'] ?? '').toString().toLowerCase().contains(q) ||
+          (m['movement_type'] ?? '').toString().toLowerCase().contains(q);
+    }).toList(growable: false);
+
+    final activeList = _filter == _InventoryFilter.movements ? filteredMovements : filteredStocks;
+    final shownCount = activeList.length < _visibleCount ? activeList.length : _visibleCount;
+    final hasMore = shownCount < activeList.length;
 
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         if (hasMore && notification.metrics.pixels >= notification.metrics.maxScrollExtent - 160) {
-          _scheduleLoadMore(filtered.length);
+          _scheduleLoadMore(activeList.length);
         }
         return false;
       },
@@ -238,7 +240,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
         child: CustomScrollView(
           slivers: [
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
               sliver: SliverToBoxAdapter(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -247,9 +249,23 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                       children: [
                         Expanded(
                           child: TextField(
-                            decoration: const InputDecoration(
-                              labelText: 'Cari SKU / Barcode / Nama',
-                              prefixIcon: Icon(Icons.search),
+                            controller: _searchCtrl,
+                            decoration: InputDecoration(
+                              hintText: 'Cari SKU, Barcode, atau Nama Produk',
+                              prefixIcon: const Icon(Icons.search),
+                              suffixIcon: _search.isNotEmpty
+                                  ? IconButton(
+                                      tooltip: 'Hapus pencarian',
+                                      onPressed: () {
+                                        _searchCtrl.clear();
+                                        setState(() {
+                                          _search = '';
+                                          _visibleCount = _batchSize;
+                                        });
+                                      },
+                                      icon: const Icon(Icons.close, size: 18),
+                                    )
+                                  : null,
                             ),
                             onChanged: (v) => setState(() {
                               _search = v;
@@ -258,87 +274,297 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        IconButton.filledTonal(
-                          tooltip: 'Scan Barcode',
-                          onPressed: () async {
-                            final scanned = await showBarcodeScannerSheet(context);
-                            if (scanned != null && mounted) {
-                              setState(() {
-                                _search = scanned;
-                                _visibleCount = _batchSize;
-                              });
-                            }
-                          },
-                          icon: const Icon(Icons.qr_code_scanner),
+                        SizedBox(
+                          width: 48,
+                          height: 48,
+                          child: IconButton.filledTonal(
+                            tooltip: 'Scan Barcode',
+                            onPressed: () async {
+                              final scanned = await showBarcodeScannerSheet(context);
+                              if (scanned != null && mounted) {
+                                _searchCtrl.text = scanned;
+                                setState(() {
+                                  _search = scanned;
+                                  _visibleCount = _batchSize;
+                                });
+                              }
+                            },
+                            icon: const Icon(Icons.qr_code_scanner),
+                          ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 12),
-                    if (widget.profile.hasPermission('inventory', 'create')) ...[
-                      FilledButton.icon(
-                        onPressed: items.isEmpty ? null : () => _openMovementSheet(),
-                        icon: const Icon(Icons.swap_horiz),
-                        label: const Text('Mutasi Stok (IN / OUT)'),
+
+                    // 2-col KPI summary strip
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Card(
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(t.radiusLg),
+                              onTap: () => setState(() {
+                                _filter = _InventoryFilter.all;
+                                _visibleCount = _batchSize;
+                              }),
+                              child: Padding(
+                                padding: const EdgeInsets.all(14),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Total SKU',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      '${items.length}',
+                                      style: AppTheme.monoNumeric(
+                                        color: t.textPrimary,
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${stocks.length} posisi gudang',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Card(
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(t.radiusLg),
+                              onTap: () => setState(() {
+                                _filter = _InventoryFilter.lowStock;
+                                _visibleCount = _batchSize;
+                              }),
+                              child: Padding(
+                                padding: const EdgeInsets.all(14),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Stok Kritis',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      '$lowStockCount',
+                                      style: AppTheme.monoNumeric(
+                                        color: lowStockCount > 0 ? t.danger : t.success,
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      lowStockCount > 0 ? 'Ketuk untuk filter' : 'Semua aman',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    if (canCreate) ...[
+                      Row(
+                        children: [
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: items.isEmpty ? null : () => _openMovementSheet(),
+                              icon: const Icon(Icons.swap_horiz, size: 18),
+                              label: const Text('Mutasi Stok'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _openCreateItemSheet,
+                              icon: const Icon(Icons.add_box_outlined, size: 18),
+                              label: const Text('Tambah Produk'),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 12),
                     ],
+
+                    ErpFilterPillBar<_InventoryFilter>(
+                      selected: _filter,
+                      onSelected: (val) => setState(() {
+                        _filter = val;
+                        _visibleCount = _batchSize;
+                      }),
+                      options: [
+                        ErpFilterPillOption(
+                          value: _InventoryFilter.all,
+                          label: 'Semua (${stocks.length})',
+                        ),
+                        ErpFilterPillOption(
+                          value: _InventoryFilter.lowStock,
+                          label: 'Stok Kritis ($lowStockCount)',
+                        ),
+                        ErpFilterPillOption(
+                          value: _InventoryFilter.movements,
+                          label: 'Riwayat Mutasi (${movements.length})',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      _filter == _InventoryFilter.movements
+                          ? 'Riwayat Pergerakan Stok (${filteredMovements.length})'
+                          : 'Posisi Stok Gudang (${filteredStocks.length})',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
                   ],
                 ),
               ),
             ),
-            if (filtered.isEmpty)
-              const SliverPadding(
-                padding: EdgeInsets.fromLTRB(16, 0, 16, 100),
+            if (activeList.isEmpty)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 108),
                 sliver: SliverToBoxAdapter(
                   child: ErpEmptyCard(
-                    title: 'Tidak ada stok gudang ditemukan',
-                    description: 'Tambahkan item katalog atau lakukan mutasi stok masuk.',
+                    title: _filter == _InventoryFilter.movements
+                        ? 'Belum ada riwayat mutasi'
+                        : _filter == _InventoryFilter.lowStock
+                            ? 'Tidak ada stok kritis'
+                            : 'Tidak ada stok gudang ditemukan',
+                    description: _filter == _InventoryFilter.lowStock
+                        ? 'Seluruh SKU berada di atas batas stok minimum.'
+                        : 'Tambahkan item katalog atau lakukan mutasi stok masuk.',
                   ),
                 ),
               )
             else
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 108),
                 sliver: SliverList.builder(
                   itemCount: shownCount + (hasMore ? 1 : 0),
                   itemBuilder: (ctx, index) {
                     if (index >= shownCount) {
-                      return const LazyListShimmerFooter(
-                        label: 'Memuat stok item berikutnya...',
+                      return LazyListShimmerFooter(
+                        label: _filter == _InventoryFilter.movements
+                            ? 'Memuat mutasi stok berikutnya...'
+                            : 'Memuat stok item berikutnya...',
                       );
                     }
-                    final s = filtered[index] as Map<String, dynamic>;
-                    final isLow = s['is_low_stock'] == true;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Card(
-                        child: ListTile(
-                          title: Text('${s['name']} (${s['sku']})'),
-                          subtitle: Text(
-                            '${s['warehouse_name']} • Jual ${formatRupiah(s['sell_price'])}',
-                          ),
+                    if (_filter == _InventoryFilter.movements) {
+                      final m = filteredMovements[index] as Map<String, dynamic>;
+                      final type = (m['movement_type'] ?? 'in').toString();
+                      final rawDelta = int.tryParse((m['qty_delta'] ?? 0).toString()) ?? 0;
+                      final isPositive = rawDelta > 0;
+                      final dt = DateTime.tryParse((m['created_at'] ?? '').toString());
+                      final timeLabel = dt != null
+                          ? formatRelativeTimeId(dt)
+                          : formatShortDateTime(m['created_at']?.toString());
+                      final note = (m['note'] ?? '').toString().trim();
+                      final subtitleParts = [
+                        (m['warehouse_name'] ?? '-').toString(),
+                        if (note.isNotEmpty) note,
+                        timeLabel,
+                      ];
+
+                      final color = type == 'transfer'
+                          ? t.info
+                          : isPositive
+                              ? t.success
+                              : t.danger;
+                      final bg = type == 'transfer'
+                          ? t.infoSoft
+                          : isPositive
+                              ? t.successSoft
+                              : t.dangerSoft;
+
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: ErpListRowCard(
+                          leadingIcon: _movementIcon(type),
+                          leadingColor: color,
+                          leadingBackground: bg,
+                          title: '${m['item_name'] ?? '-'} (${m['sku'] ?? ''})',
+                          subtitle: subtitleParts.join(' · '),
                           trailing: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
                               Text(
-                                '${s['qty']} ${s['unit']}',
-                                style: AppTheme.monoNumeric(color: t.textPrimary, fontSize: 15),
+                                '${rawDelta >= 0 ? '+$rawDelta' : rawDelta} unit',
+                                style: AppTheme.monoNumeric(color: color, fontSize: 13.5),
                               ),
                               const SizedBox(height: 4),
                               ErpBadge(
-                                label: isLow ? 'Kritis (min ${s['min_stock']})' : 'Aman',
-                                tone: isLow ? ErpBadgeTone.danger : ErpBadgeTone.success,
+                                label: type.toUpperCase(),
+                                tone: type == 'transfer'
+                                    ? ErpBadgeTone.info
+                                    : isPositive
+                                        ? ErpBadgeTone.success
+                                        : ErpBadgeTone.warning,
                               ),
                             ],
                           ),
-                          onTap: widget.profile.hasPermission('inventory', 'create')
-                              ? () {
-                                  HapticFeedback.selectionClick();
-                                  _openMovementSheet(preselectedItemId: s['item_id'].toString());
-                                }
-                              : null,
                         ),
+                      );
+                    }
+
+                    final s = filteredStocks[index] as Map<String, dynamic>;
+                    final isLow = s['is_low_stock'] == true;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: ErpListRowCard(
+                        leadingIcon: isLow
+                            ? Icons.warning_amber_rounded
+                            : Icons.inventory_2_outlined,
+                        leadingColor: isLow ? t.danger : t.accent,
+                        leadingBackground: isLow ? t.dangerSoft : t.accentSoft,
+                        title: '${s['name']} (${s['sku']})',
+                        subtitle:
+                            '${s['warehouse_name']} · Jual ${formatRupiah(s['sell_price'])}',
+                        trailing: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              '${s['qty']} ${s['unit']}',
+                              style: AppTheme.monoNumeric(
+                                color: t.textPrimary,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            ErpBadge(
+                              label: isLow ? 'Kritis (min ${s['min_stock']})' : 'Aman',
+                              tone: isLow ? ErpBadgeTone.danger : ErpBadgeTone.success,
+                            ),
+                          ],
+                        ),
+                        onTap: canCreate
+                            ? () {
+                                HapticFeedback.selectionClick();
+                                _openMovementSheet(
+                                  preselectedItemId: s['item_id'].toString(),
+                                  preselectedWarehouseId: s['warehouse_id']?.toString(),
+                                );
+                              }
+                            : null,
                       ),
                     );
                   },
@@ -346,6 +572,427 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _StockMovementSheet extends ConsumerStatefulWidget {
+  final List<dynamic> items;
+  final List<dynamic> warehouses;
+  final String? preselectedItemId;
+  final String? preselectedWarehouseId;
+
+  const _StockMovementSheet({
+    required this.items,
+    required this.warehouses,
+    this.preselectedItemId,
+    this.preselectedWarehouseId,
+  });
+
+  @override
+  ConsumerState<_StockMovementSheet> createState() => _StockMovementSheetState();
+}
+
+class _StockMovementSheetState extends ConsumerState<_StockMovementSheet> {
+  final _qtyCtrl = TextEditingController(text: '1');
+  final _noteCtrl = TextEditingController();
+
+  late String _itemId;
+  late String _whId;
+  String? _targetWhId;
+  String _mvType = 'in';
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _itemId = widget.preselectedItemId ??
+        (widget.items.first as Map<String, dynamic>)['id'].toString();
+    _whId = widget.preselectedWarehouseId ??
+        (widget.warehouses.first as Map<String, dynamic>)['id'].toString();
+    _syncTargetWarehouse();
+  }
+
+  @override
+  void dispose() {
+    _qtyCtrl.dispose();
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  void _syncTargetWarehouse() {
+    final others = widget.warehouses
+        .map((e) => (e as Map<String, dynamic>)['id'].toString())
+        .where((id) => id != _whId)
+        .toList(growable: false);
+    if (others.isEmpty) {
+      _targetWhId = null;
+    } else if (_targetWhId == null || _targetWhId == _whId) {
+      _targetWhId = others.first;
+    }
+  }
+
+  Future<void> _submit() async {
+    final qty = int.tryParse(_qtyCtrl.text.trim());
+    if (qty == null || (_mvType == 'adjustment' ? qty == 0 : qty <= 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _mvType == 'adjustment'
+                ? 'Jumlah koreksi tidak boleh 0 (isi positif atau negatif).'
+                : 'Jumlah unit harus bilangan bulat positif.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (_mvType == 'transfer') {
+      if (widget.warehouses.length < 2 || _targetWhId == null || _targetWhId == _whId) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Pilih gudang tujuan yang berbeda untuk transfer stok.'),
+          ),
+        );
+        return;
+      }
+    }
+
+    setState(() => _submitting = true);
+    final payload = <String, dynamic>{
+      'item_id': _itemId,
+      'warehouse_id': _whId,
+      if (_mvType == 'transfer' && _targetWhId != null) 'target_warehouse_id': _targetWhId,
+      'movement_type': _mvType,
+      'qty': qty,
+      if (_noteCtrl.text.trim().isNotEmpty) 'note': _noteCtrl.text.trim(),
+    };
+
+    try {
+      await ref.read(apiClientProvider).createStockMovement(payload);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (err) {
+      if (!isOfflineRecoverableError(err)) {
+        if (mounted) {
+          setState(() => _submitting = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(err.toString())),
+          );
+        }
+        return;
+      }
+
+      await ref.read(offlineSyncServiceProvider).enqueueMutation(
+            endpoint: '/api/inventory/movements',
+            method: 'POST',
+            payload: payload,
+          );
+      ref.invalidate(pendingOfflineCountProvider);
+      if (mounted) {
+        Navigator.of(context).pop(false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Offline: mutasi stok disimpan ke antrean lokal.')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canTransfer = widget.warehouses.length >= 2;
+    final targetWarehouses = widget.warehouses
+        .where((w) => (w as Map<String, dynamic>)['id'].toString() != _whId)
+        .toList(growable: false);
+
+    return ErpBottomSheetFrame(
+      title: 'Catat Mutasi Stok',
+      subtitle: 'Stok masuk, keluar, transfer gudang, atau koreksi opname',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SegmentedButton<String>(
+            segments: [
+              const ButtonSegment(value: 'in', label: Text('Masuk')),
+              const ButtonSegment(value: 'out', label: Text('Keluar')),
+              if (canTransfer) const ButtonSegment(value: 'transfer', label: Text('Transfer')),
+              const ButtonSegment(value: 'adjustment', label: Text('Koreksi')),
+            ],
+            selected: {_mvType},
+            onSelectionChanged: (s) => setState(() {
+              _mvType = s.first;
+              _syncTargetWarehouse();
+            }),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: _itemId,
+            decoration: const InputDecoration(labelText: 'Item Produk'),
+            isExpanded: true,
+            items: [
+              for (final it in widget.items)
+                DropdownMenuItem(
+                  value: (it as Map<String, dynamic>)['id'].toString(),
+                  child: Text(
+                    '${it['name']} (${it['sku']})',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: (v) {
+              if (v != null) setState(() => _itemId = v);
+            },
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: _whId,
+            decoration: InputDecoration(
+              labelText: _mvType == 'transfer' ? 'Gudang Asal' : 'Gudang',
+            ),
+            items: [
+              for (final w in widget.warehouses)
+                DropdownMenuItem(
+                  value: (w as Map<String, dynamic>)['id'].toString(),
+                  child: Text((w['name'] ?? '-').toString()),
+                ),
+            ],
+            onChanged: (v) {
+              if (v != null) {
+                setState(() {
+                  _whId = v;
+                  _syncTargetWarehouse();
+                });
+              }
+            },
+          ),
+          if (_mvType == 'transfer' && targetWarehouses.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _targetWhId,
+              decoration: const InputDecoration(labelText: 'Gudang Tujuan'),
+              items: [
+                for (final w in targetWarehouses)
+                  DropdownMenuItem(
+                    value: (w as Map<String, dynamic>)['id'].toString(),
+                    child: Text((w['name'] ?? '-').toString()),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _targetWhId = v),
+            ),
+          ],
+          const SizedBox(height: 12),
+          TextField(
+            controller: _qtyCtrl,
+            keyboardType: TextInputType.numberWithOptions(signed: _mvType == 'adjustment'),
+            decoration: InputDecoration(
+              labelText: _mvType == 'adjustment'
+                  ? 'Selisih Koreksi Unit (+ / -)'
+                  : 'Jumlah Unit',
+              hintText: _mvType == 'adjustment' ? 'Contoh: -2 atau 5' : 'Contoh: 10',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _noteCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Catatan (opsional)',
+              hintText: 'Nomor DO, opname rak, atau keperluan',
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: _submitting ? null : _submit,
+            child: Text(_submitting ? 'Menyimpan...' : 'Simpan Mutasi'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CreateItemSheet extends ConsumerStatefulWidget {
+  const _CreateItemSheet();
+
+  @override
+  ConsumerState<_CreateItemSheet> createState() => _CreateItemSheetState();
+}
+
+class _CreateItemSheetState extends ConsumerState<_CreateItemSheet> {
+  final _skuCtrl = TextEditingController();
+  final _barcodeCtrl = TextEditingController();
+  final _nameCtrl = TextEditingController();
+  final _unitCtrl = TextEditingController(text: 'pcs');
+  final _costCtrl = TextEditingController();
+  final _sellCtrl = TextEditingController();
+  final _minStockCtrl = TextEditingController(text: '5');
+
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _skuCtrl.dispose();
+    _barcodeCtrl.dispose();
+    _nameCtrl.dispose();
+    _unitCtrl.dispose();
+    _costCtrl.dispose();
+    _sellCtrl.dispose();
+    _minStockCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final sku = _skuCtrl.text.trim();
+    final name = _nameCtrl.text.trim();
+    final unit = _unitCtrl.text.trim().isEmpty ? 'pcs' : _unitCtrl.text.trim();
+    final cost = parseRupiahInput(_costCtrl.text);
+    final sell = parseRupiahInput(_sellCtrl.text);
+    final minStock = int.tryParse(_minStockCtrl.text.trim()) ?? -1;
+
+    if (sku.length < 2 || name.length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('SKU dan nama produk minimal 2 karakter.')),
+      );
+      return;
+    }
+    if (cost == null || sell == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Harga modal dan jual harus bilangan bulat Rupiah positif.'),
+        ),
+      );
+      return;
+    }
+    if (minStock < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Minimum stok harus >= 0.')),
+      );
+      return;
+    }
+
+    setState(() => _submitting = true);
+    final payload = <String, dynamic>{
+      'sku': sku,
+      if (_barcodeCtrl.text.trim().isNotEmpty) 'barcode': _barcodeCtrl.text.trim(),
+      'name': name,
+      'unit': unit,
+      'cost_price': cost,
+      'sell_price': sell,
+      'min_stock': minStock,
+    };
+
+    try {
+      await ref.read(apiClientProvider).createInventoryItem(payload);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (err) {
+      if (mounted) {
+        setState(() => _submitting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err.toString())),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ErpBottomSheetFrame(
+      title: 'Tambah Produk Baru',
+      subtitle: 'Tambahkan SKU baru ke katalog inventaris MyEkalliptus',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _skuCtrl,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: 'Kode SKU',
+                    hintText: 'EKA-001',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _unitCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Satuan Unit',
+                    hintText: 'pcs / box',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _nameCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Nama Produk',
+              hintText: 'Contoh: Kopi Arabika 1kg',
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _barcodeCtrl,
+            decoration: InputDecoration(
+              labelText: 'Barcode (opsional)',
+              suffixIcon: IconButton(
+                tooltip: 'Scan Barcode',
+                onPressed: () async {
+                  final scanned = await showBarcodeScannerSheet(context);
+                  if (scanned != null && mounted) {
+                    _barcodeCtrl.text = scanned;
+                  }
+                },
+                icon: const Icon(Icons.qr_code_scanner),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _costCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Harga Modal (Rp)',
+                    hintText: '50000',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _sellCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Harga Jual (Rp)',
+                    hintText: '75000',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _minStockCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Batas Stok Minimum',
+              hintText: '5',
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: _submitting ? null : _submit,
+            child: Text(_submitting ? 'Menyimpan...' : 'Simpan Produk'),
+          ),
+        ],
       ),
     );
   }

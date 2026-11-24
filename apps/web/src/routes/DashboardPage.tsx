@@ -207,7 +207,7 @@ export function DashboardPage({ me }: { me: MeResponse }) {
             <Boxes className="h-4 w-4 text-warning" aria-hidden="true" />
           </div>
           <p className="mt-2 text-xl font-bold text-text-primary tabular-nums">
-            {me.kpis.low_stock_alerts} item
+            {canInventory ? `${me.kpis.low_stock_alerts} item` : 'Terbatas RBAC'}
           </p>
           <p className="mt-1 text-xs text-text-secondary">Jumlah stok di bawah batas minimum</p>
         </div>
@@ -242,7 +242,7 @@ export function DashboardPage({ me }: { me: MeResponse }) {
                   to="/finance"
                   className="inline-flex items-center gap-1 text-xs font-semibold text-[#115E59] hover:underline dark:text-[#34D399]"
                 >
-                  <span>Buka Modul Keuangan</span>
+                  <span>Buka Kasir / POS</span>
                   <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
                 </Link>
               ) : null}
@@ -250,7 +250,7 @@ export function DashboardPage({ me }: { me: MeResponse }) {
 
             {!canFinance ? (
               <EmptyState
-                title="Modul Keuangan Dibatasi"
+                title="Modul Kasir / Keuangan Dibatasi"
                 description="Role akun Anda tidak memiliki izin finance:view. Hubungi pemilik sistem untuk melihat rincian arus kas."
               />
             ) : summaryQuery.isLoading || accountsQuery.isLoading ? (
@@ -275,8 +275,8 @@ export function DashboardPage({ me }: { me: MeResponse }) {
                 ) : (
                   <EmptyState
                     title="Belum ada transaksi posted 30 hari terakhir"
-                    description="Catat pemasukan atau pengeluaran pertama di modul Keuangan untuk memantau arus kas harian."
-                    actionLabel="Catat Transaksi"
+                    description="Catat penjualan kasir pertama di modul Kasir / POS untuk memantau arus kas harian."
+                    actionLabel="Buka Kasir / POS"
                     onAction={() => void navigate({ to: '/finance' })}
                   />
                 )}
@@ -415,7 +415,7 @@ export function DashboardPage({ me }: { me: MeResponse }) {
                   </div>
                 ) : null}
 
-                {hasPermission(me.permissions, 'payroll', 'view') ? (
+                {me.role === 'owner' || me.role === 'hr' || me.role === 'finance' ? (
                   <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
                     <div>
                       <p className="font-semibold text-text-primary">Payroll Run Draft</p>

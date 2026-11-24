@@ -51,4 +51,11 @@ class FcmAdapter {
   static Stream<String> get tokenStream => FirebaseMessaging.instance.onTokenRefresh;
 
   static Stream<RemoteMessage> get foregroundMessages => FirebaseMessaging.onMessage;
+
+  static Stream<RemoteMessage> get openedAppMessages => FirebaseMessaging.onMessageOpenedApp;
+
+  static Future<RemoteMessage?> getInitialMessage() async {
+    if (!isSupportedOnThisDevice) return null;
+    return FirebaseMessaging.instance.getInitialMessage();
+  }
 }

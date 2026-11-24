@@ -13,11 +13,6 @@ export function ThemeToggleButton({
   const isDark = theme === 'dark';
 
   function handleClick(e: MouseEvent<HTMLButtonElement>) {
-    const hasPointerCoords = e.clientX > 0 || e.clientY > 0;
-    if (hasPointerCoords) {
-      toggleTheme({ x: e.clientX, y: e.clientY });
-      return;
-    }
     const rect = e.currentTarget.getBoundingClientRect();
     toggleTheme({
       x: rect.left + rect.width / 2,
@@ -40,14 +35,14 @@ export function ThemeToggleButton({
           className={`ep-theme-icon absolute inset-0 h-4 w-4 ${
             isDark
               ? 'ep-theme-icon-active scale-100 rotate-0 opacity-100'
-              : 'scale-[0.82] -rotate-45 opacity-0'
+              : 'scale-[0.82] -rotate-[65deg] opacity-0'
           }`}
         />
         <Moon
           className={`ep-theme-icon absolute inset-0 h-4 w-4 ${
             !isDark
               ? 'ep-theme-icon-active scale-100 rotate-0 opacity-100'
-              : 'scale-[0.82] rotate-45 opacity-0'
+              : 'scale-[0.82] rotate-[65deg] opacity-0'
           }`}
         />
       </span>

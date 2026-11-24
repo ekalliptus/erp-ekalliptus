@@ -3,12 +3,12 @@
   color-scheme: light;
   --ep-canvas: #F7F7F5;
   --ep-surface: #FFFFFF;
-  --ep-surface-subtle: #EFF2EE;
-  --ep-border: #E2E6E1;
-  --ep-border-strong: #CBD3CA;
+  --ep-surface-subtle: #ECF0EB;
+  --ep-border: #D4DBD3;
+  --ep-border-strong: #B5C1B5;
   --ep-text-primary: #111815;
-  --ep-text-secondary: #4B5751;
-  --ep-text-muted: #7A8780;
+  --ep-text-secondary: #3F4B45;
+  --ep-text-muted: #5A6760;
   --ep-accent: #0F766E;
   --ep-accent-hover: #115E59;
   --ep-accent-soft: #CCFBF1;
@@ -45,7 +45,7 @@
   --ep-border-strong: #34403A;
   --ep-text-primary: #F1F5F3;
   --ep-text-secondary: #B4C0B9;
-  --ep-text-muted: #7D8B84;
+  --ep-text-muted: #8E9E96;
   --ep-accent: #10B981;
   --ep-accent-hover: #34D399;
   --ep-accent-soft: #064E3B;
