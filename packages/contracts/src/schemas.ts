@@ -780,6 +780,8 @@ export const printAgentHeartbeatSchema = z.object({
     .enum(['connected', 'qr_required', 'disconnected'])
     .optional()
     .default('disconnected'),
+  openwa_qr_code: z.string().trim().max(2048).optional().nullable(),
+  openwa_link_code: z.string().trim().max(32).optional().nullable(),
   capabilities: z.record(z.unknown()).optional(),
 });
 

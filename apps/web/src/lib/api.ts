@@ -972,6 +972,9 @@ export interface PrintDeviceRow {
   printer_state_reasons: string[];
   ink_levels: PrintInkLevel[];
   openwa_status: 'connected' | 'qr_required' | 'disconnected' | string;
+  openwa_qr_code?: string | null;
+  openwa_link_code?: string | null;
+  openwa_qr_updated_at?: string | null;
   created_at: string;
   updated_at: string;
 }

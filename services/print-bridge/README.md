@@ -25,7 +25,7 @@ Layanan daemon lokal di laptop/PC toko yang terhubung satu jaringan Wi-Fi dengan
    ```powershell
    npm start
    ```
-7. Saat OpenWA pertama kali aktif, pindai QR Code WhatsApp yang muncul pada log terminal memakai aplikasi WhatsApp di ponsel toko. Sesi tersimpan di `.openwa-session/` agar tidak perlu scan ulang saat restart.
+7. Saat OpenWA pertama kali aktif, pindai QR Code WhatsApp langsung di halaman web `https://my.ekalliptus.com/printer` (otomatis muncul selama bridge menyala) atau lewat log terminal memakai WhatsApp di ponsel toko. Sesi tersimpan di `.openwa-session/` agar tidak perlu scan ulang saat restart.
 
 ## Troubleshooting Pairing OpenWA
 - Jika Chrome headless tidak memunculkan QR atau gagal menautkan perangkat, atur `OPENWA_HEADLESS=false` di `services/print-bridge/.env` untuk memindai QR langsung di jendela Chrome.

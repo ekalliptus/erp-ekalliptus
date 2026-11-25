@@ -50,6 +50,7 @@ import type { ErpModulePlugin } from './plugin.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HEARTBEAT_ONLINE_WINDOW_MS = 45_000;
+const QR_FRESHNESS_WINDOW_MS = 90_000;
 const MAX_PRINT_FILE_BYTES = 26_214_400n; // 25 MiB
 
 const FALLBACK_PRICES: Record<string, bigint> = {
@@ -218,13 +219,33 @@ function hasAllowedPrintExtension(filename: string): boolean {
   return ALLOWED_PRINT_EXTENSIONS.has(filename.slice(dotIdx).toLowerCase());
 }
 
-function sanitizeDeviceForClient(row: typeof print_devices.$inferSelect) {
-  const { agent_token_hash: _hash, ...rest } = row;
+export function sanitizeDeviceForClient(
+  row: typeof print_devices.$inferSelect,
+  options?: { includePairing?: boolean },
+) {
+  const {
+    agent_token_hash: _hash,
+    openwa_qr_code,
+    openwa_link_code,
+    openwa_qr_updated_at,
+    ...rest
+  } = row;
   const lastHb = row.last_heartbeat_at ? row.last_heartbeat_at.getTime() : 0;
   const isOnline = Boolean(lastHb && Date.now() - lastHb <= HEARTBEAT_ONLINE_WINDOW_MS);
+  const qrTs = openwa_qr_updated_at ? openwa_qr_updated_at.getTime() : 0;
+  const exposePairing =
+    Boolean(options?.includePairing) &&
+    isOnline &&
+    row.openwa_status === 'qr_required' &&
+    Boolean(qrTs && Date.now() - qrTs <= QR_FRESHNESS_WINDOW_MS);
+
   return {
     ...(jsonSafe(rest) as Record<string, unknown>),
     is_online: isOnline,
+    openwa_qr_code: exposePairing ? (openwa_qr_code ?? null) : null,
+    openwa_link_code: exposePairing ? (openwa_link_code ?? null) : null,
+    openwa_qr_updated_at:
+      exposePairing && openwa_qr_updated_at ? openwa_qr_updated_at.toISOString() : null,
   };
 }
 
@@ -506,11 +527,18 @@ async function printAgentAuth(c: Context<AppEnv>, next: Next) {
 const printerRouter = new Hono<AppEnv>();
 
 printerRouter.get('/devices', requirePermission('printer', 'view'), async (c) => {
+  const auth = c.get('auth');
+  const includePairing =
+    auth.platform === 'web' &&
+    (hasPermission(auth.permissions, 'printer', 'create') ||
+      hasPermission(auth.permissions, 'printer', 'update'));
   const rows = await getDb()
     .select()
     .from(print_devices)
     .orderBy(desc(print_devices.created_at));
-  return c.json({ devices: rows.map(sanitizeDeviceForClient) });
+  return c.json({
+    devices: rows.map((row) => sanitizeDeviceForClient(row, { includePairing })),
+  });
 });
 
 printerRouter.post('/devices', requirePermission('printer', 'create'), async (c) => {
@@ -1366,6 +1394,19 @@ agentRouter.post('/heartbeat', async (c) => {
 
   const d = parsed.data;
   const now = new Date();
+  const isQrRequired = d.openwa_status === 'qr_required';
+  const nextQrCode = isQrRequired
+    ? d.openwa_qr_code !== undefined
+      ? d.openwa_qr_code || null
+      : device.openwa_qr_code
+    : null;
+  const nextLinkCode = isQrRequired
+    ? d.openwa_link_code !== undefined
+      ? d.openwa_link_code || null
+      : device.openwa_link_code
+    : null;
+  const nextQrUpdatedAt = isQrRequired && (nextQrCode || nextLinkCode) ? now : null;
+
   const [updated] = await getDb()
     .update(print_devices)
     .set({
@@ -1375,6 +1416,9 @@ agentRouter.post('/heartbeat', async (c) => {
       printer_state_reasons: d.printer_state_reasons ?? [],
       ink_levels: d.ink_levels ?? [],
       openwa_status: d.openwa_status,
+      openwa_qr_code: nextQrCode,
+      openwa_link_code: nextLinkCode,
+      openwa_qr_updated_at: nextQrUpdatedAt,
       capabilities: d.capabilities ?? device.capabilities,
       last_heartbeat_at: now,
       updated_at: now,
@@ -1386,6 +1430,7 @@ agentRouter.post('/heartbeat', async (c) => {
     device_id: updated.id,
     printer_state: updated.printer_state,
     openwa_status: updated.openwa_status,
+    has_qr: Boolean(updated.openwa_qr_code),
   });
 
   return c.json({

@@ -5,6 +5,7 @@ import {
   calculatePrintJobPricing,
   hashAgentToken,
   parsePageRangeCount,
+  sanitizeDeviceForClient,
   verifyAgentTokenHash,
 } from '../modules/printer.js';
 import { authorizeStorageDownload } from '../services/security-policy.js';
@@ -90,5 +91,58 @@ describe('Smart Printer unit logic', () => {
     });
     assert.equal(denied.allowed, false);
     assert.equal(denied.reason, 'missing_printer_view');
+  });
+
+  it('exposes OpenWA pairing QR only when includePairing=true, online, qr_required, and fresh', () => {
+    const now = new Date();
+    const baseRow = {
+      id: '11111111-1111-1111-1111-111111111111',
+      device_name: 'Kasir Printer',
+      host: '192.168.0.5',
+      mdns_host: null,
+      model: 'HP Smart Tank 580-590 series',
+      agent_token_hash: 'secret_hash_should_never_leak',
+      is_active: true,
+      last_heartbeat_at: now,
+      printer_state: 'idle',
+      printer_state_reasons: ['none'],
+      ink_levels: [],
+      capabilities: {},
+      openwa_status: 'qr_required',
+      openwa_qr_code: '2@sample_qr_payload',
+      openwa_link_code: '12345678',
+      openwa_qr_updated_at: now,
+      created_by: null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    const allowedWeb = sanitizeDeviceForClient(baseRow, { includePairing: true });
+    assert.equal('agent_token_hash' in allowedWeb, false);
+    assert.equal(allowedWeb.is_online, true);
+    assert.equal(allowedWeb.openwa_qr_code, '2@sample_qr_payload');
+    assert.equal(allowedWeb.openwa_link_code, '12345678');
+
+    const strippedMobileOrViewOnly = sanitizeDeviceForClient(baseRow, { includePairing: false });
+    assert.equal(strippedMobileOrViewOnly.openwa_qr_code, null);
+    assert.equal(strippedMobileOrViewOnly.openwa_link_code, null);
+
+    const strippedConnected = sanitizeDeviceForClient(
+      { ...baseRow, openwa_status: 'connected' },
+      { includePairing: true },
+    );
+    assert.equal(strippedConnected.openwa_qr_code, null);
+
+    const strippedOffline = sanitizeDeviceForClient(
+      { ...baseRow, last_heartbeat_at: new Date(Date.now() - 120_000) },
+      { includePairing: true },
+    );
+    assert.equal(strippedOffline.openwa_qr_code, null);
+
+    const strippedExpiredQr = sanitizeDeviceForClient(
+      { ...baseRow, openwa_qr_updated_at: new Date(Date.now() - 120_000) },
+      { includePairing: true },
+    );
+    assert.equal(strippedExpiredQr.openwa_qr_code, null);
   });
 });

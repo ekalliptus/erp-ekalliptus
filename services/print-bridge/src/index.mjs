@@ -205,33 +205,28 @@ async function main() {
   const enableOpenWa = String(process.env.ENABLE_OPENWA || 'true').toLowerCase() !== 'false';
   const openwaHeadless = String(process.env.OPENWA_HEADLESS || 'true').toLowerCase() !== 'false';
   const openwaLinkPhone = (process.env.OPENWA_LINK_PHONE || '').trim();
-  const openwa = enableOpenWa
-    ? startOpenWaWorker({
-        apiClient,
-        sessionId: process.env.OPENWA_SESSION_ID || 'ekalliptus-printer',
-        sessionPath: process.env.OPENWA_SESSION_PATH || './.openwa-session',
-        chromePath: process.env.CHROME_PATH || '',
-        headless: openwaHeadless,
-        linkCode: openwaLinkPhone,
-      })
-    : {
-        getStatus: () => 'disconnected',
-        sendText: async () => false,
-        close: async () => {},
-      };
 
-  console.log(
-    `[bridge] Smart Printer Bridge berjalan (dryRun=${dryRun}, openwa=${enableOpenWa ? 'enabled' : 'disabled'}, host=${preferredHost || 'auto'})`,
-  );
-
-  let isPrinting = false;
-  let shuttingDown = false;
+  let heartbeatInFlight = false;
+  let heartbeatQueued = false;
   let heartbeatConfirmed = false;
+  let openwa = {
+    getStatus: () => 'disconnected',
+    getPairingState: () => ({ qrCode: null, linkCode: null }),
+    sendText: async () => false,
+    close: async () => {},
+  };
 
   async function tickHeartbeat() {
+    if (heartbeatInFlight) {
+      heartbeatQueued = true;
+      return;
+    }
+    heartbeatInFlight = true;
     try {
       const probe = await safeResolvePrinter(preferredHost);
       const p = probe.printer;
+      const openwaStatus = openwa.getStatus();
+      const pairing = openwa.getPairingState();
       await apiClient.heartbeat({
         printer_host: p?.ip || preferredHost,
         printer_model: p?.model || 'HP Smart Tank 580-590 series',
@@ -242,7 +237,9 @@ async function main() {
             : [String(p.stateReasons || 'none')]
           : ['unreachable'],
         ink_levels: probe.online ? p.markers : [],
-        openwa_status: openwa.getStatus(),
+        openwa_status: openwaStatus,
+        openwa_qr_code: openwaStatus === 'qr_required' ? pairing.qrCode : null,
+        openwa_link_code: openwaStatus === 'qr_required' ? pairing.linkCode : null,
       });
       if (!heartbeatConfirmed) {
         heartbeatConfirmed = true;
@@ -253,8 +250,35 @@ async function main() {
     } catch (err) {
       heartbeatConfirmed = false;
       console.warn('[heartbeat] Gagal mengirim heartbeat:', err?.message || err);
+    } finally {
+      heartbeatInFlight = false;
+      if (heartbeatQueued) {
+        heartbeatQueued = false;
+        void tickHeartbeat();
+      }
     }
   }
+
+  if (enableOpenWa) {
+    openwa = startOpenWaWorker({
+      apiClient,
+      sessionId: process.env.OPENWA_SESSION_ID || 'ekalliptus-printer',
+      sessionPath: process.env.OPENWA_SESSION_PATH || './.openwa-session',
+      chromePath: process.env.CHROME_PATH || '',
+      headless: openwaHeadless,
+      linkCode: openwaLinkPhone,
+      onStateChange: () => {
+        void tickHeartbeat();
+      },
+    });
+  }
+
+  console.log(
+    `[bridge] Smart Printer Bridge berjalan (dryRun=${dryRun}, openwa=${enableOpenWa ? 'enabled' : 'disabled'}, host=${preferredHost || 'auto'})`,
+  );
+
+  let isPrinting = false;
+  let shuttingDown = false;
 
   async function tickQueue() {
     if (isPrinting || shuttingDown) return;

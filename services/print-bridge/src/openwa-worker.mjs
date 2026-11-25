@@ -48,12 +48,25 @@ export function startOpenWaWorker({
   chromePath = '',
   headless = true,
   linkCode = '',
+  onStateChange = null,
   logger = console,
 }) {
   let status = 'qr_required';
+  let currentQrCode = null;
+  let currentLinkCode = null;
   let client = null;
   let activeBootClient = null;
   let stopped = false;
+
+  const notifyStateChange = () => {
+    if (typeof onStateChange === 'function') {
+      try {
+        onStateChange();
+      } catch {
+        // Ignore listener errors
+      }
+    }
+  };
 
   (async () => {
     let coreMod;
@@ -71,6 +84,9 @@ export function startOpenWaWorker({
       qrcodeTerminal = qrMod.default || qrMod;
     } catch (err) {
       status = 'disconnected';
+      currentQrCode = null;
+      currentLinkCode = null;
+      notifyStateChange();
       logger.warn('[openwa] Paket OpenWA v5 belum siap:', err?.message || err);
       return;
     }
@@ -80,6 +96,9 @@ export function startOpenWaWorker({
     const PuppeteerDriver = driverMod.PuppeteerDriver || driverMod.default?.PuppeteerDriver;
     if (typeof createClient !== 'function' || typeof Client !== 'function' || typeof PuppeteerDriver !== 'function') {
       status = 'disconnected';
+      currentQrCode = null;
+      currentLinkCode = null;
+      notifyStateChange();
       logger.error('[openwa] Export createClient/Client/PuppeteerDriver tidak ditemukan.');
       return;
     }
@@ -120,9 +139,12 @@ export function startOpenWaWorker({
         const qrData = evt?.details?.qr;
         if (qrData && typeof qrData === 'string' && !qrData.startsWith('data:image/')) {
           status = 'qr_required';
+          currentQrCode = qrData;
+          currentLinkCode = null;
+          notifyStateChange();
           if (qrData !== lastQrRendered) {
             lastQrRendered = qrData;
-            logger.log('[openwa] Pindai QR Code WhatsApp di bawah ini (WhatsApp -> Perangkat Tertaut -> Tautkan Perangkat):');
+            logger.log('[openwa] QR Code siap. Pindai dari https://my.ekalliptus.com/printer atau terminal ini:');
             qrcodeTerminal.generate(qrData, { small: true });
           }
         }
@@ -132,10 +154,18 @@ export function startOpenWaWorker({
         const code = evt?.details?.linkCode;
         if (code) {
           status = 'qr_required';
+          currentLinkCode = String(code);
+          currentQrCode = null;
+          notifyStateChange();
           logger.log(
-            `[openwa] Masukkan kode pairing 8 digit ini di WhatsApp HP (Perangkat Tertaut -> Tautkan dengan nomor telepon): ${code}`,
+            `[openwa] Masukkan kode pairing 8 digit ini di WhatsApp HP (Perangkat Tertaut -> Tautkan dengan nomor telepon) atau lihat di https://my.ekalliptus.com/printer: ${code}`,
           );
         }
+      });
+
+      waClient.events.on('launch.auth.qr.expired', () => {
+        currentQrCode = null;
+        notifyStateChange();
       });
 
       waClient.events.on('launch.auth.qr.scanned', () => {
@@ -148,6 +178,9 @@ export function startOpenWaWorker({
 
       waClient.events.on('auth.logout', () => {
         status = 'qr_required';
+        currentQrCode = null;
+        currentLinkCode = null;
+        notifyStateChange();
         logger.log('[openwa] Sesi WhatsApp keluar (logout). Scan QR ulang diperlukan.');
       });
 
@@ -160,12 +193,17 @@ export function startOpenWaWorker({
 
       client = waClient;
       status = 'connected';
+      currentQrCode = null;
+      currentLinkCode = null;
+      notifyStateChange();
       logger.log(`[openwa] Terhubung (session: ${sessionId})`);
 
       waClient.onStateChanged((state) => {
         const normalized = String(state || '').toUpperCase();
         if (normalized === 'CONNECTED' || normalized === 'READY') {
           status = 'connected';
+          currentQrCode = null;
+          currentLinkCode = null;
         } else if (normalized.includes('QR') || normalized === 'UNPAIRED') {
           status = 'qr_required';
         } else if (
@@ -174,7 +212,10 @@ export function startOpenWaWorker({
           normalized === 'DISCONNECTED'
         ) {
           status = 'disconnected';
+          currentQrCode = null;
+          currentLinkCode = null;
         }
+        notifyStateChange();
         logger.log(`[openwa] State berubah -> ${state} (${status})`);
       });
 
@@ -244,15 +285,22 @@ export function startOpenWaWorker({
       });
     } catch (err) {
       status = 'disconnected';
+      currentQrCode = null;
+      currentLinkCode = null;
+      notifyStateChange();
       logger.error('[openwa] Gagal inisialisasi sesi WhatsApp:', err?.message || err);
     }
   })().catch((err) => {
     status = 'disconnected';
+    currentQrCode = null;
+    currentLinkCode = null;
+    notifyStateChange();
     logger.error('[openwa] Error fatal worker WhatsApp:', err?.message || err);
   });
 
   return {
     getStatus: () => status,
+    getPairingState: () => ({ qrCode: currentQrCode, linkCode: currentLinkCode }),
     sendText: async (chatId, text) => {
       if (!client || status !== 'connected') {
         return false;

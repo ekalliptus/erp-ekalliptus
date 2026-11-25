@@ -21,6 +21,7 @@ import {
   KeyRound,
   Plus,
   Printer,
+  QrCode,
   RefreshCw,
   RotateCcw,
   Search,
@@ -31,6 +32,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useId, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
 import { ModulePageSkeleton } from '../components/Skeleton.tsx';
+import { QrCodeCanvas } from '../components/QrCodeCanvas.tsx';
 import { SlideOver } from '../components/SlideOver.tsx';
 import { EmptyState, ErrorState } from '../components/StateViews.tsx';
 import { StatusBadge, type BadgeTone } from '../components/StatusBadge.tsx';
@@ -138,6 +140,7 @@ export function PrinterPage({ me }: { me: MeResponse }) {
   const canUpdate = hasPermission(me.permissions, 'printer', 'update');
   const canDelete = hasPermission(me.permissions, 'printer', 'delete');
   const canApprove = hasPermission(me.permissions, 'printer', 'approve');
+  const canPairWhatsapp = canCreate || canUpdate;
   const canFinanceView = hasPermission(me.permissions, 'finance', 'view');
   const canFinancePost = hasPermission(me.permissions, 'finance', 'create') || canApprove;
 
@@ -147,6 +150,8 @@ export function PrinterPage({ me }: { me: MeResponse }) {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [deviceModalOpen, setDeviceModalOpen] = useState(false);
+  const [qrPanelExpanded, setQrPanelExpanded] = useState(true);
+  const [linkCodeCopied, setLinkCodeCopied] = useState(false);
   const [revealedToken, setRevealedToken] = useState<{
     deviceName: string;
     token: string;
@@ -161,7 +166,11 @@ export function PrinterPage({ me }: { me: MeResponse }) {
     queryKey: ['printer', 'devices'],
     queryFn: erpApi.printer.devices,
     enabled: canView,
-    refetchInterval: 15_000,
+    refetchInterval: (query) => {
+      const list = query.state.data?.devices ?? [];
+      const needsQr = list.some((d) => d.is_online && d.openwa_status === 'qr_required');
+      return needsQr ? 3_000 : 15_000;
+    },
   });
 
   const pricingQuery = useQuery({
@@ -205,6 +214,11 @@ export function PrinterPage({ me }: { me: MeResponse }) {
   const primaryDevice = useMemo(() => {
     const list = devicesQuery.data?.devices ?? [];
     return list.find((d) => d.is_online) ?? list[0] ?? null;
+  }, [devicesQuery.data]);
+
+  const pairingDevice = useMemo(() => {
+    const list = devicesQuery.data?.devices ?? [];
+    return list.find((d) => d.is_online && d.openwa_status === 'qr_required') ?? null;
   }, [devicesQuery.data]);
 
   const invalidatePrinter = () => {
@@ -390,6 +404,104 @@ export function PrinterPage({ me }: { me: MeResponse }) {
             ) : null}
           </div>
         )}
+
+        {/* Web-only OpenWA Pairing QR Panel */}
+        {canPairWhatsapp && pairingDevice ? (
+          <div className="mt-4 border-t border-border pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <QrCode className="h-4 w-4 text-accent" aria-hidden="true" />
+                <p className="text-xs font-semibold text-text-primary">
+                  Tautkan WhatsApp Bridge ({pairingDevice.device_name})
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void devicesQuery.refetch()}
+                  className="inline-flex min-h-[34px] cursor-pointer items-center gap-1.5 rounded-md border border-border-strong bg-canvas px-2.5 text-xs font-semibold text-text-primary hover:border-accent"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Muat Ulang</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQrPanelExpanded((prev) => !prev)}
+                  className="min-h-[34px] cursor-pointer rounded-md border border-border-strong bg-canvas px-2.5 text-xs font-semibold text-text-primary hover:border-accent"
+                >
+                  {qrPanelExpanded ? 'Sembunyikan QR' : 'Tampilkan QR WhatsApp'}
+                </button>
+              </div>
+            </div>
+
+            {qrPanelExpanded ? (
+              <div className="mt-3 rounded-lg border border-border bg-canvas p-4">
+                {pairingDevice.openwa_qr_code ? (
+                  <div className="flex flex-col items-start gap-5 sm:flex-row sm:items-center">
+                    <QrCodeCanvas
+                      value={pairingDevice.openwa_qr_code}
+                      size={220}
+                      label={`QR Code WhatsApp untuk ${pairingDevice.device_name}`}
+                    />
+                    <div className="space-y-2 text-xs text-text-secondary">
+                      <p className="font-semibold text-text-primary">
+                        Pindai QR ini langsung dari WhatsApp di ponsel toko
+                      </p>
+                      <ol className="list-decimal space-y-1 pl-4">
+                        <li>Buka WhatsApp di HP toko, lalu pilih menu Perangkat Tertaut.</li>
+                        <li>Ketuk Tautkan Perangkat dan arahkan kamera ke QR Code di samping.</li>
+                        <li>
+                          QR diperbarui otomatis tiap 3 detik dan panel ini tertutup otomatis
+                          setelah status OpenWA Terhubung.
+                        </li>
+                      </ol>
+                      {pairingDevice.openwa_qr_updated_at ? (
+                        <p className="text-[11px] text-text-secondary">
+                          Diperbarui: {formatDateTimeId(pairingDevice.openwa_qr_updated_at)}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : pairingDevice.openwa_link_code ? (
+                  <div className="space-y-2.5 text-xs text-text-secondary">
+                    <p className="font-semibold text-text-primary">
+                      Kode Pairing 8 Digit (Tautkan dengan Nomor Telepon)
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="rounded-lg border border-border bg-surface px-4 py-2 font-mono text-2xl font-bold tracking-widest text-text-primary">
+                        {pairingDevice.openwa_link_code}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await navigator.clipboard.writeText(pairingDevice.openwa_link_code ?? '');
+                          setLinkCodeCopied(true);
+                          setTimeout(() => setLinkCodeCopied(false), 2000);
+                        }}
+                        className="inline-flex min-h-[38px] cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-hover"
+                      >
+                        {linkCodeCopied ? (
+                          <Check className="h-4 w-4" aria-hidden="true" />
+                        ) : (
+                          <Copy className="h-4 w-4" aria-hidden="true" />
+                        )}
+                        <span>{linkCodeCopied ? 'Tersalin' : 'Salin Kode'}</span>
+                      </button>
+                    </div>
+                    <p>
+                      Buka WhatsApp di HP toko, pilih Perangkat Tertaut -&gt; Tautkan dengan nomor
+                      telepon, lalu masukkan 8 digit kode di atas.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-text-secondary">
+                    Menunggu QR Code terbaru dari print-bridge lokal...
+                  </p>
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </section>
 
       {/* KPI Strip */}
@@ -613,6 +725,10 @@ export function PrinterPage({ me }: { me: MeResponse }) {
           canCreate={canCreate}
           canUpdate={canUpdate}
           onOpenRegister={() => setDeviceModalOpen(true)}
+          onOpenQrPairing={() => {
+            setQrPanelExpanded(true);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
           onTokenRotated={(name, token) => {
             setTokenCopied(false);
             setRevealedToken({ deviceName: name, token });
@@ -911,6 +1027,7 @@ function DevicesSection({
   canCreate,
   canUpdate,
   onOpenRegister,
+  onOpenQrPairing,
   onTokenRotated,
   onError,
 }: {
@@ -918,6 +1035,7 @@ function DevicesSection({
   canCreate: boolean;
   canUpdate: boolean;
   onOpenRegister: () => void;
+  onOpenQrPairing: () => void;
   onTokenRotated: (deviceName: string, token: string) => void;
   onError: (msg: string) => void;
 }) {
@@ -979,17 +1097,29 @@ function DevicesSection({
                   {dev.last_heartbeat_at ? formatDateTimeId(dev.last_heartbeat_at) : 'Belum ada'}
                 </p>
               </div>
-              {canUpdate ? (
-                <div className="pt-1">
-                  <button
-                    type="button"
-                    disabled={rotateMut.isPending}
-                    onClick={() => rotateMut.mutate(dev.id)}
-                    className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-md border border-border-strong bg-surface px-3 text-xs font-semibold text-text-primary hover:border-accent"
-                  >
-                    <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Putar Agent Token</span>
-                  </button>
+              {canUpdate || canCreate ? (
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  {dev.is_online && dev.openwa_status === 'qr_required' ? (
+                    <button
+                      type="button"
+                      onClick={onOpenQrPairing}
+                      className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-hover"
+                    >
+                      <QrCode className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Scan QR WhatsApp</span>
+                    </button>
+                  ) : null}
+                  {canUpdate ? (
+                    <button
+                      type="button"
+                      disabled={rotateMut.isPending}
+                      onClick={() => rotateMut.mutate(dev.id)}
+                      className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-md border border-border-strong bg-surface px-3 text-xs font-semibold text-text-primary hover:border-accent"
+                    >
+                      <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Putar Agent Token</span>
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>
