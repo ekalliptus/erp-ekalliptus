@@ -10,8 +10,11 @@
     "test": "node --test test/bridge.test.mjs"
   },
   "dependencies": {
-    "@open-wa/wa-automate": "^4.74.0",
+    "@open-wa/client": "^5.12.1",
+    "@open-wa/core": "^5.12.1",
+    "@open-wa/driver-puppeteer": "^5.12.1",
     "dotenv": "^16.4.7",
-    "pdf-lib": "^1.17.1"
+    "pdf-lib": "^1.17.1",
+    "qrcode-terminal": "^0.12.0"
   }
 }

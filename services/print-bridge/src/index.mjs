@@ -201,12 +201,16 @@ async function main() {
 
   const apiClient = new PrintBridgeApiClient({ baseUrl, agentToken });
   const enableOpenWa = String(process.env.ENABLE_OPENWA || 'true').toLowerCase() !== 'false';
+  const openwaHeadless = String(process.env.OPENWA_HEADLESS || 'true').toLowerCase() !== 'false';
+  const openwaLinkPhone = (process.env.OPENWA_LINK_PHONE || '').trim();
   const openwa = enableOpenWa
-    ? await startOpenWaWorker({
+    ? startOpenWaWorker({
         apiClient,
         sessionId: process.env.OPENWA_SESSION_ID || 'ekalliptus-printer',
         sessionPath: process.env.OPENWA_SESSION_PATH || './.openwa-session',
         chromePath: process.env.CHROME_PATH || '',
+        headless: openwaHeadless,
+        linkCode: openwaLinkPhone,
       })
     : {
         getStatus: () => 'disconnected',

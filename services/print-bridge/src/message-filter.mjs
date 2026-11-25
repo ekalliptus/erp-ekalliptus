@@ -161,7 +161,16 @@ export function classifyIncomingMessage(message) {
     senderObj.pushname || senderObj.verifiedName || senderObj.name || message.notifyName || '',
   ).trim();
   const customerPhone = extractPhoneFromChatId(message.author || message.from || chatId);
-  const waMessageId = String(message.id || '').trim() || `wa-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let rawMsgId = '';
+  if (typeof message.id === 'string') {
+    rawMsgId = message.id;
+  } else if (message.id && typeof message.id === 'object') {
+    rawMsgId = String(message.id._serialized || message.id.id || '');
+  } else if (message.id != null) {
+    rawMsgId = String(message.id);
+  }
+  const waMessageId =
+    rawMsgId.trim() || `wa-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const caption = String(message.caption || '').trim();
 
   return {

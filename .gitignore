@@ -22,6 +22,7 @@ legacy/.env.backup
 # OpenWA local session & print bridge env
 .openwa-session/
 services/print-bridge/.env
+services/print-bridge/logs/
 
 # managed
 **.data.json

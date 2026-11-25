@@ -26,3 +26,8 @@ Layanan daemon lokal di laptop/PC toko yang terhubung satu jaringan Wi-Fi dengan
    npm start
    ```
 7. Saat OpenWA pertama kali aktif, pindai QR Code WhatsApp yang muncul pada log terminal memakai aplikasi WhatsApp di ponsel toko. Sesi tersimpan di `.openwa-session/` agar tidak perlu scan ulang saat restart.
+
+## Troubleshooting Pairing OpenWA
+- Jika Chrome headless tidak memunculkan QR atau gagal menautkan perangkat, atur `OPENWA_HEADLESS=false` di `services/print-bridge/.env` untuk memindai QR langsung di jendela Chrome.
+- Sebagai alternatif tanpa scan QR, isi `OPENWA_LINK_PHONE=628xxxxxxxxxx` (format angka saja tanpa `+`) untuk menautkan via kode 8 digit.
+- Jika sesi lama rusak, hentikan bridge lalu hapus folder `.openwa-session/` (biarkan `.env` tetap ada) sebelum menjalankan ulang `npm start`.
