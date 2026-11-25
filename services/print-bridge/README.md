@@ -16,7 +16,7 @@ Layanan daemon lokal di laptop/PC toko yang terhubung satu jaringan Wi-Fi dengan
    cd services\print-bridge
    Copy-Item .env.example .env
    ```
-4. Isi `PRINT_AGENT_TOKEN` dan `PRINTER_HOST=192.168.0.5` di `services/print-bridge/.env`.
+4. Isi `PRINT_AGENT_TOKEN` dan `PRINTER_HOST=192.168.0.5` di `services/print-bridge/.env` atau `.env.local` (bridge otomatis membaca `.env` dan `.env.local` pada root repo maupun folder `services/print-bridge/`, dengan prioritas lebih tinggi untuk `.env.local`).
 5. Jalankan verifikasi printer tanpa kertas terlebih dahulu:
    ```powershell
    npm run verify-printer

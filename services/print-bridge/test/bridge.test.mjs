@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 import { PDFDocument } from 'pdf-lib';
 import { countDocumentPages, isOfficeExtension } from '../src/doc-inspect.mjs';
+import { loadBridgeEnv } from '../src/env-loader.mjs';
 import { classifyIncomingMessage, MAX_PRINT_FILE_BYTES } from '../src/message-filter.mjs';
 import { decodeDecryptedMedia } from '../src/openwa-worker.mjs';
 
@@ -166,5 +170,41 @@ describe('OpenWA v5 DataURL media decoder & message id handling', () => {
     });
     assert.equal(res.action, 'ingest');
     assert.equal(res.waMessageId, 'true_628111@c.us_ABC123');
+  });
+});
+
+describe('Bridge env loader (.env and .env.local precedence)', () => {
+  it('loads root .env.local over bridge .env, prioritizes bridge .env.local, preserves shell env, and ignores empty overrides', async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ekp-env-test-'));
+    try {
+      const bridgeDir = path.join(tmpRoot, 'services', 'print-bridge');
+      await fs.mkdir(bridgeDir, { recursive: true });
+
+      await fs.writeFile(
+        path.join(bridgeDir, '.env'),
+        'PRINT_AGENT_TOKEN=ekp_ganti_dengan_token_bridge_anda\nPRINTER_HOST=192.168.0.5\nERP_API_BASE_URL=https://bridge-env.test\nSHELL_VAR=from_bridge_env\n',
+      );
+      await fs.writeFile(
+        path.join(tmpRoot, '.env.local'),
+        'PRINT_AGENT_TOKEN=ekp_from_root_env_local\nPRINTER_HOST=\nSHELL_VAR=from_root_local\n',
+      );
+
+      const env1 = { SHELL_VAR: 'from_shell' };
+      loadBridgeEnv({ bridgeRoot: bridgeDir, targetEnv: env1 });
+      assert.equal(env1.PRINT_AGENT_TOKEN, 'ekp_from_root_env_local');
+      assert.equal(env1.PRINTER_HOST, '192.168.0.5');
+      assert.equal(env1.ERP_API_BASE_URL, 'https://bridge-env.test');
+      assert.equal(env1.SHELL_VAR, 'from_shell');
+
+      await fs.writeFile(
+        path.join(bridgeDir, '.env.local'),
+        'PRINT_AGENT_TOKEN=ekp_from_bridge_env_local\n',
+      );
+      const env2 = { SHELL_VAR: 'from_shell' };
+      loadBridgeEnv({ bridgeRoot: bridgeDir, targetEnv: env2 });
+      assert.equal(env2.PRINT_AGENT_TOKEN, 'ekp_from_bridge_env_local');
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });

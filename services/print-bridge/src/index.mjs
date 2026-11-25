@@ -1,16 +1,16 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { config as loadDotenv } from 'dotenv';
 import { PrintBridgeApiClient } from './api-client.mjs';
 import { findLibreOfficePath, isOfficeExtension } from './doc-inspect.mjs';
+import { loadBridgeEnv } from './env-loader.mjs';
 import { startOpenWaWorker } from './openwa-worker.mjs';
 import { resolvePrinter } from './printer/discover.mjs';
 import { printJob, validateJob } from './printer/ipp.mjs';
 import { getMediaSpec } from './printer/pwg-raster.mjs';
 import { buildTestPageHtml, renderInputToPwg } from './printer/render.mjs';
 
-loadDotenv();
+loadBridgeEnv();
 
 const QUALITY_MAP = {
   draft: 3,
@@ -196,7 +196,9 @@ async function main() {
   const baseUrl = (process.env.ERP_API_BASE_URL || '').trim();
   const agentToken = (process.env.PRINT_AGENT_TOKEN || '').trim();
   if (!baseUrl || !agentToken) {
-    throw new Error('ERP_API_BASE_URL dan PRINT_AGENT_TOKEN wajib diisi di services/print-bridge/.env');
+    throw new Error(
+      'ERP_API_BASE_URL dan PRINT_AGENT_TOKEN wajib diisi di .env atau .env.local (services/print-bridge maupun root repo)',
+    );
   }
 
   const apiClient = new PrintBridgeApiClient({ baseUrl, agentToken });
@@ -224,6 +226,7 @@ async function main() {
 
   let isPrinting = false;
   let shuttingDown = false;
+  let heartbeatConfirmed = false;
 
   async function tickHeartbeat() {
     try {
@@ -241,7 +244,14 @@ async function main() {
         ink_levels: probe.online ? p.markers : [],
         openwa_status: openwa.getStatus(),
       });
+      if (!heartbeatConfirmed) {
+        heartbeatConfirmed = true;
+        console.log(
+          `[heartbeat] Terhubung ke ERP API (device online, printer=${probe.online ? p.stateText : 'offline'}).`,
+        );
+      }
     } catch (err) {
+      heartbeatConfirmed = false;
       console.warn('[heartbeat] Gagal mengirim heartbeat:', err?.message || err);
     }
   }
