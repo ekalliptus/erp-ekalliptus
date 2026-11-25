@@ -427,6 +427,7 @@ export const voidPosSaleSchema = z.object({
 export const PORTFOLIO_CATEGORIES = [
   'website',
   'mobile_app',
+  'web_mobile',
   'erp_system',
   'ui_ux',
   'automation',

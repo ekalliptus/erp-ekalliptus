@@ -124,5 +124,13 @@ describe('createPortfolioProjectSchema validation', () => {
       price_amount: null,
     });
     assert.equal(negotiable.success, true);
+
+    const webMobile = createPortfolioProjectSchema.safeParse({
+      title: 'Platform Toko Web & App',
+      category: 'web_mobile',
+      price_type: 'negotiable',
+      price_amount: null,
+    });
+    assert.equal(webMobile.success, true);
   });
 });
