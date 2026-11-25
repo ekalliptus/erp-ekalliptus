@@ -50,6 +50,15 @@ router.post('/seal', async (c) => {
     return c.json(sealed);
   }
 
+  if (feed === 'erp:printer') {
+    if (!hasPermission(auth.permissions, 'printer', 'view')) {
+      return c.json({ error: 'Forbidden: printer:view required.' }, 403);
+    }
+    const query = erpEventsLiveQuery('erp:printer');
+    const sealed = await rt.seal({ query });
+    return c.json(sealed);
+  }
+
   if (!hasPermission(auth.permissions, 'attendance', 'view')) {
     return c.json({ error: 'Forbidden: attendance:view required.' }, 403);
   }
@@ -65,7 +74,12 @@ router.post('/seal', async (c) => {
 router.get('/events', async (c) => {
   const auth = c.get('auth');
   const channel = c.req.query('channel') || 'erp:finance';
-  if (channel !== 'erp:finance' && channel !== 'erp:inventory' && channel !== 'erp:attendance') {
+  if (
+    channel !== 'erp:finance' &&
+    channel !== 'erp:inventory' &&
+    channel !== 'erp:attendance' &&
+    channel !== 'erp:printer'
+  ) {
     return c.json({ error: 'Invalid channel.' }, 400);
   }
 
@@ -74,7 +88,9 @@ router.get('/events', async (c) => {
       ? 'finance'
       : channel === 'erp:inventory'
         ? 'inventory'
-        : 'attendance';
+        : channel === 'erp:printer'
+          ? 'printer'
+          : 'attendance';
   if (!hasPermission(auth.permissions, requiredModule, 'view')) {
     return c.json({ error: `Forbidden: ${requiredModule}:view required.` }, 403);
   }

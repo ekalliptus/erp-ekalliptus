@@ -14,6 +14,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  Printer,
   Radio,
   ShieldCheck,
   Store,
@@ -45,6 +46,7 @@ interface NavEntry {
     | '/attendance'
     | '/payroll'
     | '/portfolio'
+    | '/printer'
     | '/ai'
     | '/rbac'
     | '/audit'
@@ -58,6 +60,7 @@ interface NavEntry {
     | 'attendance'
     | 'payroll'
     | 'portfolio'
+    | 'printer'
     | 'ai'
     | 'rbac'
     | 'audit';
@@ -89,6 +92,13 @@ const NAV_ENTRIES: NavEntry[] = [
     module: 'portfolio',
   },
   {
+    to: '/printer',
+    label: 'Smart Printer',
+    group: 'Operasional',
+    icon: Printer,
+    module: 'printer',
+  },
+  {
     to: '/ai',
     label: 'AI Management',
     group: 'Kontrol',
@@ -102,6 +112,7 @@ const NAV_ENTRIES: NavEntry[] = [
 const FINANCE_INVALIDATE_KEYS: QueryKey[] = [['me'], ['finance'], ['payroll']];
 const INVENTORY_INVALIDATE_KEYS: QueryKey[] = [['me'], ['inventory']];
 const ATTENDANCE_INVALIDATE_KEYS: QueryKey[] = [['me'], ['attendance'], ['payroll']];
+const PRINTER_INVALIDATE_KEYS: QueryKey[] = [['me'], ['printer']];
 
 export function AppShell({
   me,
@@ -148,6 +159,7 @@ export function AppShell({
   const canFinance = hasPermission(me.permissions, 'finance', 'view');
   const canInventory = hasPermission(me.permissions, 'inventory', 'view');
   const canAttendance = hasPermission(me.permissions, 'attendance', 'view');
+  const canPrinter = hasPermission(me.permissions, 'printer', 'view');
 
   const primaryRealtimeFeed = useMemo<RealtimeFeed>(() => {
     if (canFinance) return 'erp:finance';
@@ -278,6 +290,11 @@ export function AppShell({
           enabled={canAttendance}
           queryKeysToInvalidate={ATTENDANCE_INVALIDATE_KEYS}
           onStatusChange={primaryRealtimeFeed === 'erp:attendance' ? setLiveStatus : undefined}
+        />
+        <ErpRealtimeSubscriber
+          feed="erp:printer"
+          enabled={canPrinter}
+          queryKeysToInvalidate={PRINTER_INVALIDATE_KEYS}
         />
 
       {/* Desktop persistent collapsible sidebar */}

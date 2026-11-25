@@ -91,7 +91,16 @@ export function resolveEndpointUrl(
 ): string | null {
   if (provider === 'custom') {
     const trimmed = customEndpoint?.trim() ?? '';
-    return isSafeAiEndpointUrl(trimmed) ? trimmed : null;
+    if (!isSafeAiEndpointUrl(trimmed)) return null;
+    const parsed = new URL(trimmed);
+    const cleanPath = parsed.pathname.replace(/\/+$/, '');
+    const lowerPath = cleanPath.toLowerCase();
+    const hasCompletionSuffix =
+      lowerPath.endsWith('/chat/completions') ||
+      lowerPath.endsWith('/completions') ||
+      lowerPath.endsWith('/responses');
+    const finalPath = hasCompletionSuffix ? cleanPath : `${cleanPath}/chat/completions`;
+    return `${parsed.origin}${finalPath}${parsed.search}`;
   }
   const preset = AI_PROVIDER_PRESETS[provider];
   return preset?.endpoint || null;
@@ -169,7 +178,10 @@ export async function callAiChatCompletion(params: {
   };
   if (params.provider === 'zai') {
     headers['Accept-Language'] = 'id-ID,en-US,en';
-  } else if (params.provider === 'openrouter') {
+  } else if (
+    params.provider === 'openrouter' ||
+    params.endpoint.toLowerCase().includes('openrouter.ai')
+  ) {
     headers['HTTP-Referer'] = 'https://ekalliptus.com';
     headers['X-Title'] = 'Ekalliptus Digital';
   }

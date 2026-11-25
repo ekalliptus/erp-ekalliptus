@@ -1,4 +1,5 @@
 import type { PlatformKind, RoleCode } from '@ekalliptus/contracts';
+import type { print_devices } from '@ekalliptus/db';
 
 export interface AuthEmployee {
   id: string;
@@ -28,5 +29,6 @@ export interface AuthContext {
 export type AppEnv = {
   Variables: {
     auth: AuthContext;
+    printDevice?: typeof print_devices.$inferSelect;
   };
 };

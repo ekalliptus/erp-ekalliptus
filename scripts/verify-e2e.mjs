@@ -40,6 +40,8 @@ const createdPosSaleIds = [];
 const createdAttendanceIds = [];
 const createdPayrollRunIds = [];
 const createdReleaseIds = [];
+const createdPrintDeviceIds = [];
+const createdPrintJobIds = [];
 const uploadedS3Keys = [];
 
 let realtimeClient = null;
@@ -186,9 +188,9 @@ async function main() {
   const ownerMe = await apiJson('/api/me', ownerJwt);
   assert.equal(ownerMe.status, 200);
   assert.equal(ownerMe.json.role, 'owner');
-  assert.equal(ownerMe.json.permissions.length, 36);
+  assert.equal(ownerMe.json.permissions.length, 54);
   assert.ok(ownerMe.json.employee.auth_user_id, 'auth_user_id set after claim');
-  console.log('[PASS] Neon Auth JWT + RBAC GET /api/me -> 200 (36 permissions)');
+  console.log('[PASS] Neon Auth JWT + RBAC GET /api/me -> 200 (54 permissions)');
 
   const staffBlocked = await apiJson('/api/finance/accounts', staffJwt, {
     method: 'POST',
@@ -922,12 +924,18 @@ async function main() {
     'Outdated client build=1 must receive pending releases',
   );
 
+  const latestAndroidVer = verOutdated.json.latest?.version || '1.3.3';
+  const latestAndroidBuild = Number(verOutdated.json.latest?.build_number || 7);
   const verCurrent = await apiJson(
-    '/api/app/version?platform=android&current_version=1.2.0&current_build=3',
+    `/api/app/version?platform=android&current_version=${encodeURIComponent(latestAndroidVer)}&current_build=${latestAndroidBuild}`,
     null,
   );
   assert.equal(verCurrent.status, 200);
-  assert.equal(verCurrent.json.has_update, false, 'Current client build=3 must have has_update=false');
+  assert.equal(
+    verCurrent.json.has_update,
+    false,
+    `Current client build=${latestAndroidBuild} must have has_update=false`,
+  );
 
   const webChangelog = await apiJson('/api/app/changelog?platform=web', null);
   assert.equal(webChangelog.status, 200);
@@ -1002,7 +1010,198 @@ async function main() {
   assert.ok(apkLen > 1000000, `Uploaded Android APK size must be > 1MB (got ${apkLen})`);
   console.log(`[PASS] App Version, Changelog, Update Check, APK Download (${(apkLen / (1024 * 1024)).toFixed(2)} MB) & Owner Guards verified`);
 
-  console.log('\nALL 5 NEON SERVICES + NOTIFICATIONS + OWNER CRUD + APP VERSION VERIFIED END-TO-END SUCCESSFULLY!');
+  // 14. Smart Printer Otomatis E2E (Auth, Idempotent Ingest, SKIP LOCKED Claim, ACID Finance, Outbox)
+  const devCreate = await apiJson('/api/print/devices', ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      device_name: `E2E Bridge ${ts}`,
+      host: '192.168.0.5',
+      model: 'HP Smart Tank 580-590 series',
+    }),
+  });
+  assert.equal(devCreate.status, 201, `Create print device failed: ${JSON.stringify(devCreate.json)}`);
+  assert.ok(devCreate.json.agent_token?.startsWith('ekp_'), 'Agent token must be returned once on register');
+  assert.equal(devCreate.json.device.agent_token_hash, undefined, 'agent_token_hash must never be exposed');
+  const printDeviceId = devCreate.json.device.id;
+  const printAgentToken = devCreate.json.agent_token;
+  createdPrintDeviceIds.push(printDeviceId);
+
+  const devList = await apiJson('/api/print/devices', ownerJwt);
+  assert.equal(devList.status, 200);
+  const foundDev = devList.json.devices.find((d) => d.id === printDeviceId);
+  assert.ok(foundDev);
+  assert.equal(foundDev.agent_token_hash, undefined, 'GET /devices must omit agent_token_hash');
+
+  const badAgentHb = await apiJson('/api/print-agent/heartbeat', null, {
+    method: 'POST',
+    headers: { 'X-Print-Agent-Token': 'ekp_invalid_token_should_401' },
+    body: JSON.stringify({ printer_state: 'idle', openwa_status: 'connected' }),
+  });
+  assert.equal(badAgentHb.status, 401, 'Invalid X-Print-Agent-Token must return 401');
+
+  const goodAgentHb = await apiJson('/api/print-agent/heartbeat', null, {
+    method: 'POST',
+    headers: { 'X-Print-Agent-Token': printAgentToken },
+    body: JSON.stringify({
+      printer_host: '192.168.0.5',
+      printer_model: 'HP Smart Tank 580-590 series',
+      printer_state: 'idle',
+      ink_levels: [{ name: 'Black', level: 80, color: '#111111' }],
+      openwa_status: 'connected',
+    }),
+  });
+  assert.equal(goodAgentHb.status, 200);
+  assert.equal(goodAgentHb.json.device.is_online, true);
+
+  const printPresign = await apiJson('/api/print-agent/jobs/presign-upload', null, {
+    method: 'POST',
+    headers: { 'X-Print-Agent-Token': printAgentToken },
+    body: JSON.stringify({
+      filename: `e2e-doc-${ts}.pdf`,
+      content_type: 'application/pdf',
+      file_size_bytes: 128,
+    }),
+  });
+  assert.equal(printPresign.status, 200);
+  const printKey = printPresign.json.object_key;
+  assert.ok(printKey.startsWith('print-jobs/'));
+  uploadedS3Keys.push(printKey);
+
+  const putPrintS3 = await fetch(printPresign.json.upload_url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/pdf' },
+    body: Buffer.from(`%PDF-1.4\n% E2E Print Test ${ts}\n`, 'utf8'),
+  });
+  assert.equal(putPrintS3.status, 200, `Print S3 upload failed (${putPrintS3.status})`);
+
+  const waMsgId = `e2e-wa-msg-${ts}`;
+  const ingest1 = await apiJson('/api/print-agent/jobs/ingest', null, {
+    method: 'POST',
+    headers: { 'X-Print-Agent-Token': printAgentToken },
+    body: JSON.stringify({
+      wa_message_id: waMsgId,
+      wa_chat_id: '6281999900306@c.us',
+      customer_name: `Pelanggan E2E ${ts}`,
+      customer_phone: '6281999900306',
+      file_name: `e2e-doc-${ts}.pdf`,
+      file_mime: 'application/pdf',
+      file_size_bytes: 128,
+      file_object_key: printKey,
+      detected_page_count: 2,
+    }),
+  });
+  assert.equal(ingest1.status, 201, `Ingest failed: ${JSON.stringify(ingest1.json)}`);
+  assert.equal(ingest1.json.deduplicated, false);
+  const printJobId = ingest1.json.job.id;
+  createdPrintJobIds.push(printJobId);
+
+  const ingest2 = await apiJson('/api/print-agent/jobs/ingest', null, {
+    method: 'POST',
+    headers: { 'X-Print-Agent-Token': printAgentToken },
+    body: JSON.stringify({
+      wa_message_id: waMsgId,
+      wa_chat_id: '6281999900306@c.us',
+      file_name: `e2e-doc-${ts}.pdf`,
+      file_mime: 'application/pdf',
+      file_size_bytes: 128,
+      file_object_key: printKey,
+      detected_page_count: 2,
+    }),
+  });
+  assert.equal(ingest2.status, 200);
+  assert.equal(ingest2.json.deduplicated, true);
+  assert.equal(ingest2.json.job.id, printJobId);
+
+  const pricingRes = await apiJson('/api/print/pricing', ownerJwt);
+  assert.equal(pricingRes.status, 200);
+  assert.ok(pricingRes.json.pricing_rules.length >= 14);
+
+  const optRes = await apiJson(`/api/print/jobs/${printJobId}/options`, ownerJwt, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      paper_size: 'a4',
+      color_mode: 'color',
+      copies: 2,
+      detected_page_count: 2,
+      discount_amount: 0,
+    }),
+  });
+  assert.equal(optRes.status, 200);
+  assert.equal(optRes.json.job.total_price, '6000');
+
+  const finAccId = createdAccountIds[0];
+  assert.ok(finAccId, 'Finance account from earlier suite must exist for print ACID check');
+  const beforePrintBalRes = await apiJson('/api/finance/accounts', ownerJwt);
+  const beforePrintAcc = beforePrintBalRes.json.accounts.find((a) => a.id === finAccId);
+  const beforePrintBal = BigInt(beforePrintAcc.balance);
+
+  const approvePrint = await apiJson(`/api/print/jobs/${printJobId}/approve`, ownerJwt, {
+    method: 'POST',
+    body: JSON.stringify({
+      device_id: printDeviceId,
+      auto_post_finance: true,
+      finance_account_id: finAccId,
+    }),
+  });
+  assert.equal(approvePrint.status, 200);
+  assert.equal(approvePrint.json.job.status, 'queued');
+
+  const [claimA, claimB] = await Promise.all([
+    apiJson('/api/print-agent/jobs/claim-next', null, {
+      method: 'POST',
+      headers: { 'X-Print-Agent-Token': printAgentToken },
+    }),
+    apiJson('/api/print-agent/jobs/claim-next', null, {
+      method: 'POST',
+      headers: { 'X-Print-Agent-Token': printAgentToken },
+    }),
+  ]);
+  assert.equal(claimA.status, 200);
+  assert.equal(claimB.status, 200);
+  const claimedJobs = [claimA.json.job, claimB.json.job].filter(Boolean);
+  assert.equal(claimedJobs.length, 1, 'FOR UPDATE SKIP LOCKED must guarantee exactly one worker claims the queued job');
+  assert.equal(claimedJobs[0].id, printJobId);
+
+  const printDone = await apiJson(`/api/print-agent/jobs/${printJobId}/result`, null, {
+    method: 'POST',
+    headers: { 'X-Print-Agent-Token': printAgentToken },
+    body: JSON.stringify({
+      status: 'printed',
+      dry_run: true,
+      rendered_pages: 2,
+      ipp_job_id: 901,
+    }),
+  });
+  assert.equal(printDone.status, 200);
+  assert.equal(printDone.json.job.status, 'printed');
+  assert.ok(printDone.json.job.finance_transaction_id, 'Auto finance posting must link transaction');
+  createdTransactionIds.push(printDone.json.job.finance_transaction_id);
+
+  const afterPrintBalRes = await apiJson('/api/finance/accounts', ownerJwt);
+  const afterPrintAcc = afterPrintBalRes.json.accounts.find((a) => a.id === finAccId);
+  assert.equal(
+    BigInt(afterPrintAcc.balance) - beforePrintBal,
+    6000n,
+    'Finance account balance must increase atomically by exact BIGINT total_price (6000)',
+  );
+
+  const outboxPending = await apiJson('/api/print-agent/wa-outbox/pending', null, {
+    method: 'GET',
+    headers: { 'X-Print-Agent-Token': printAgentToken },
+  });
+  assert.equal(outboxPending.status, 200);
+  const firstOutbox = outboxPending.json.messages.find((m) => m.job_id === printJobId);
+  assert.ok(firstOutbox, 'WA outbox must contain notifications for the WA print job');
+  const ackRes = await apiJson(`/api/print-agent/wa-outbox/${firstOutbox.id}/ack`, null, {
+    method: 'POST',
+    headers: { 'X-Print-Agent-Token': printAgentToken },
+    body: JSON.stringify({ status: 'sent' }),
+  });
+  assert.equal(ackRes.status, 200);
+  assert.equal(ackRes.json.message.status, 'sent');
+  console.log('[PASS] Smart Printer Otomatis E2E (auth, ingest dedup, SKIP LOCKED claim, dry-run printed, ACID finance +6000, WA outbox) verified');
+
+  console.log('\nALL NEON SERVICES + NOTIFICATIONS + OWNER CRUD + APP VERSION + SMART PRINTER VERIFIED END-TO-END SUCCESSFULLY!');
 }
 
 async function cleanup() {
@@ -1014,6 +1213,19 @@ async function cleanup() {
   }
 
   try {
+    if (createdPrintJobIds.length > 0) {
+      await pool.query('DELETE FROM print_wa_outbox WHERE job_id = ANY($1::uuid[])', [
+        createdPrintJobIds,
+      ]);
+      await pool.query('DELETE FROM print_jobs WHERE id = ANY($1::uuid[])', [
+        createdPrintJobIds,
+      ]);
+    }
+    if (createdPrintDeviceIds.length > 0) {
+      await pool.query('DELETE FROM print_devices WHERE id = ANY($1::uuid[])', [
+        createdPrintDeviceIds,
+      ]);
+    }
     if (createdReleaseIds.length > 0) {
       await pool.query('DELETE FROM app_releases WHERE id = ANY($1::uuid[])', [createdReleaseIds]);
     }

@@ -15,6 +15,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -653,5 +654,161 @@ export const ai_usage_logs = pgTable(
   (table) => [
     index('ai_usage_logs_created_idx').on(table.created_at.desc()),
     index('ai_usage_logs_feature_created_idx').on(table.feature_key, table.created_at.desc()),
+  ],
+);
+
+export interface PrintInkLevel {
+  name: string;
+  level: number | null;
+  color?: string | null;
+}
+
+export const print_devices = pgTable('print_devices', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  device_name: text('device_name').notNull(),
+  host: text('host'),
+  mdns_host: text('mdns_host'),
+  model: text('model').notNull().default('HP Smart Tank 580-590 series'),
+  agent_token_hash: text('agent_token_hash').notNull(),
+  is_active: boolean('is_active').notNull().default(true),
+  last_heartbeat_at: timestamp('last_heartbeat_at', { withTimezone: true }),
+  printer_state: text('printer_state').notNull().default('unknown'),
+  printer_state_reasons: jsonb('printer_state_reasons').$type<string[]>().notNull().default([]),
+  ink_levels: jsonb('ink_levels').$type<PrintInkLevel[]>().notNull().default([]),
+  capabilities: jsonb('capabilities').$type<Record<string, unknown>>().notNull().default({}),
+  openwa_status: text('openwa_status').notNull().default('disconnected'),
+  created_by: uuid('created_by').references(() => employees.id),
+  created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const print_pricing_rules = pgTable(
+  'print_pricing_rules',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    paper_size: text('paper_size').notNull(),
+    color_mode: text('color_mode').notNull(),
+    price_per_page: bigint('price_per_page', { mode: 'bigint' }).notNull(),
+    duplex_discount_per_page: bigint('duplex_discount_per_page', { mode: 'bigint' })
+      .notNull()
+      .default(sql`0`),
+    currency: text('currency').notNull().default('IDR'),
+    is_active: boolean('is_active').notNull().default(true),
+    updated_by: uuid('updated_by').references(() => employees.id),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique('print_pricing_rules_paper_color_uq').on(table.paper_size, table.color_mode),
+    check(
+      'print_pricing_rules_paper_chk',
+      sql`paper_size IN ('a4', 'f4', 'legal', 'letter', 'a5', '4x6', '5x7')`,
+    ),
+    check('print_pricing_rules_color_chk', sql`color_mode IN ('color', 'mono')`),
+    check('print_pricing_rules_price_nonneg_chk', sql`price_per_page >= 0`),
+    check('print_pricing_rules_duplex_nonneg_chk', sql`duplex_discount_per_page >= 0`),
+  ],
+);
+
+export const print_jobs = pgTable(
+  'print_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    job_code: text('job_code').notNull().unique(),
+    source: text('source').notNull().default('whatsapp'),
+    device_id: uuid('device_id').references(() => print_devices.id),
+    wa_message_id: text('wa_message_id'),
+    wa_chat_id: text('wa_chat_id'),
+    customer_name: text('customer_name'),
+    customer_phone: text('customer_phone'),
+    customer_note: text('customer_note'),
+    file_name: text('file_name').notNull(),
+    file_mime: text('file_mime').notNull(),
+    file_size_bytes: bigint('file_size_bytes', { mode: 'bigint' }).notNull(),
+    file_object_key: text('file_object_key').notNull(),
+    detected_page_count: integer('detected_page_count').notNull().default(1),
+    paper_size: text('paper_size').notNull().default('a4'),
+    color_mode: text('color_mode').notNull().default('color'),
+    quality: text('quality').notNull().default('normal'),
+    copies: integer('copies').notNull().default(1),
+    orientation: text('orientation').notNull().default('auto'),
+    fit: text('fit').notNull().default('contain'),
+    borderless: boolean('borderless').notNull().default(false),
+    duplex: boolean('duplex').notNull().default(false),
+    page_range: text('page_range'),
+    pages_to_print: integer('pages_to_print').notNull().default(1),
+    unit_price_per_page: bigint('unit_price_per_page', { mode: 'bigint' }).notNull().default(sql`0`),
+    discount_amount: bigint('discount_amount', { mode: 'bigint' }).notNull().default(sql`0`),
+    total_price: bigint('total_price', { mode: 'bigint' }).notNull().default(sql`0`),
+    status: text('status').notNull().default('pending_approval'),
+    reject_reason: text('reject_reason'),
+    ipp_job_id: integer('ipp_job_id'),
+    error_message: text('error_message'),
+    finance_account_id: uuid('finance_account_id').references(() => finance_accounts.id),
+    finance_transaction_id: uuid('finance_transaction_id').references(() => finance_transactions.id),
+    finance_posted_at: timestamp('finance_posted_at', { withTimezone: true }),
+    approved_by: uuid('approved_by').references(() => employees.id),
+    approved_at: timestamp('approved_at', { withTimezone: true }),
+    printed_at: timestamp('printed_at', { withTimezone: true }),
+    file_deleted_at: timestamp('file_deleted_at', { withTimezone: true }),
+    created_by: uuid('created_by').references(() => employees.id),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('print_jobs_status_created_idx').on(table.status, table.created_at.desc()),
+    uniqueIndex('print_jobs_wa_message_uq')
+      .on(table.wa_message_id)
+      .where(sql`wa_message_id IS NOT NULL`),
+    check(
+      'print_jobs_source_chk',
+      sql`source IN ('whatsapp', 'manual_web', 'manual_mobile')`,
+    ),
+    check(
+      'print_jobs_paper_chk',
+      sql`paper_size IN ('a4', 'f4', 'legal', 'letter', 'a5', '4x6', '5x7')`,
+    ),
+    check('print_jobs_color_chk', sql`color_mode IN ('color', 'mono')`),
+    check('print_jobs_quality_chk', sql`quality IN ('draft', 'normal', 'high')`),
+    check('print_jobs_orientation_chk', sql`orientation IN ('auto', 'portrait', 'landscape')`),
+    check('print_jobs_fit_chk', sql`fit IN ('contain', 'cover', 'stretch')`),
+    check(
+      'print_jobs_status_chk',
+      sql`status IN ('pending_approval', 'approved', 'queued', 'printing', 'printed', 'rejected', 'failed', 'cancelled')`,
+    ),
+    check('print_jobs_copies_chk', sql`copies >= 1 AND copies <= 99`),
+    check('print_jobs_discount_nonneg_chk', sql`discount_amount >= 0`),
+    check('print_jobs_total_nonneg_chk', sql`total_price >= 0`),
+  ],
+);
+
+export const print_wa_outbox = pgTable(
+  'print_wa_outbox',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    job_id: uuid('job_id').references(() => print_jobs.id, { onDelete: 'cascade' }),
+    device_id: uuid('device_id').references(() => print_devices.id),
+    wa_chat_id: text('wa_chat_id').notNull(),
+    kind: text('kind').notNull(),
+    message_text: text('message_text').notNull(),
+    status: text('status').notNull().default('pending'),
+    attempt_count: integer('attempt_count').notNull().default(0),
+    last_error: text('last_error'),
+    sent_at: timestamp('sent_at', { withTimezone: true }),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('print_wa_outbox_device_status_idx').on(
+      table.device_id,
+      table.status,
+      table.created_at,
+    ),
+    uniqueIndex('print_wa_outbox_job_kind_uq')
+      .on(table.job_id, table.kind)
+      .where(sql`job_id IS NOT NULL`),
+    check(
+      'print_wa_outbox_kind_chk',
+      sql`kind IN ('received', 'approved', 'printed', 'rejected', 'failed')`,
+    ),
+    check('print_wa_outbox_status_chk', sql`status IN ('pending', 'sent', 'failed')`),
   ],
 );

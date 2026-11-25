@@ -47,6 +47,9 @@ const PayrollPage = lazyWithRetry(() =>
 const PortfolioPage = lazyWithRetry(() =>
   import('./routes/PortfolioPage.tsx').then((m) => ({ default: m.PortfolioPage })),
 );
+const PrinterPage = lazyWithRetry(() =>
+  import('./routes/PrinterPage.tsx').then((m) => ({ default: m.PrinterPage })),
+);
 const AiManagementPage = lazyWithRetry(() =>
   import('./routes/AiManagementPage.tsx').then((m) => ({ default: m.AiManagementPage })),
 );
@@ -288,6 +291,17 @@ const portfolioRoute = createRoute({
   ),
 });
 
+const printerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/printer',
+  component: () => (
+    <AuthenticatedFrame
+      skeletonVariant="printer"
+      renderPage={(me) => <PrinterPage me={me} />}
+    />
+  ),
+});
+
 const aiRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/ai',
@@ -340,6 +354,7 @@ const routeTree = rootRoute.addChildren([
   attendanceRoute,
   payrollRoute,
   portfolioRoute,
+  printerRoute,
   aiRoute,
   rbacRoute,
   auditRoute,

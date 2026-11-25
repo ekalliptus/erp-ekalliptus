@@ -50,11 +50,24 @@ router.post('/presign-upload', async (c) => {
       );
     }
   }
+  if (category === 'print-jobs') {
+    if (!hasPermission(auth.permissions, 'printer', 'create')) {
+      return c.json(
+        { error: 'Forbidden: Anda tidak memiliki izin mengunggah dokumen cetak.' },
+        403,
+      );
+    }
+  }
   const safeName = sanitizeFilename(filename);
+  const now = new Date();
+  const yyyy = String(now.getUTCFullYear());
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
   const objectKey =
     category === 'release'
       ? `releases/android/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`
-      : `${category}/${auth.employee.id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`;
+      : category === 'print-jobs'
+        ? `print-jobs/${yyyy}/${mm}/${crypto.randomUUID()}-${safeName}`
+        : `${category}/${auth.employee.id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`;
 
   const uploadUrl = await createPresignedUploadUrl({
     key: objectKey,

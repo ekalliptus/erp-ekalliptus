@@ -137,16 +137,26 @@ function resolveEffectiveExecutionConfig(
   if (!target) return null;
 
   const consultRow = rowsByKey.get('consult');
-  const shareFromConsult = featureKey === 'portfolio_autofill' && target.use_shared_key && consultRow;
+  const shareFromConsult = Boolean(
+    featureKey === 'portfolio_autofill' && target.use_shared_key && consultRow,
+  );
+  const effectiveSource = shareFromConsult && consultRow ? consultRow : target;
 
-  const provider = (shareFromConsult ? consultRow.provider : target.provider) as AiProvider;
-  const endpointRaw = shareFromConsult ? consultRow.custom_endpoint : target.custom_endpoint;
+  const provider = effectiveSource.provider as AiProvider;
+  const endpointRaw = effectiveSource.custom_endpoint;
   const endpoint = resolveEndpointUrl(provider, endpointRaw);
-  const encryptedKey = shareFromConsult ? consultRow.api_key_encrypted : target.api_key_encrypted;
+  const encryptedKey = effectiveSource.api_key_encrypted;
   const apiKey = decryptApiKey(encryptedKey);
+  const rawTargetModel = target.model.trim();
+  const consultModel = shareFromConsult && consultRow ? consultRow.model.trim() : '';
+  const shouldInheritConsultModel =
+    shareFromConsult &&
+    consultModel.length > 0 &&
+    (rawTargetModel.length === 0 ||
+      (target.provider !== effectiveSource.provider && rawTargetModel === 'glm-4.5-air'));
   const model =
-    target.model.trim() ||
-    (shareFromConsult ? consultRow.model.trim() : '') ||
+    (shouldInheritConsultModel ? consultModel : rawTargetModel) ||
+    consultModel ||
     AI_PROVIDER_PRESETS[provider]?.defaultModel ||
     'glm-4.5-air';
 

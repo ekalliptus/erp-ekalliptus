@@ -677,4 +677,67 @@ class ApiClient {
       data: {'reason': reason},
     );
   }
+
+  Future<Map<String, dynamic>> fetchPrintDevices() async {
+    return _request<Map<String, dynamic>>('GET', '/api/print/devices');
+  }
+
+  Future<Map<String, dynamic>> fetchPrintPricing() async {
+    return _request<Map<String, dynamic>>('GET', '/api/print/pricing');
+  }
+
+  Future<Map<String, dynamic>> fetchPrintJobs({
+    String? status,
+    String? query,
+    int limit = 60,
+  }) async {
+    final params = <String, String>{'limit': '$limit'};
+    if (status != null && status.isNotEmpty && status != 'all') {
+      params['status'] = status;
+    }
+    if (query != null && query.trim().isNotEmpty) {
+      params['q'] = query.trim();
+    }
+    final qs = Uri(queryParameters: params).query;
+    return _request<Map<String, dynamic>>('GET', '/api/print/jobs?$qs');
+  }
+
+  Future<Map<String, dynamic>> fetchPrintJobDetail(String id) async {
+    return _request<Map<String, dynamic>>('GET', '/api/print/jobs/$id');
+  }
+
+  Future<Map<String, dynamic>> createManualPrintJob(Map<String, dynamic> body) async {
+    return _request<Map<String, dynamic>>('POST', '/api/print/jobs/manual', data: body);
+  }
+
+  Future<Map<String, dynamic>> updatePrintJobOptions(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    return _request<Map<String, dynamic>>('PATCH', '/api/print/jobs/$id/options', data: body);
+  }
+
+  Future<Map<String, dynamic>> approvePrintJob(String id, Map<String, dynamic> body) async {
+    return _request<Map<String, dynamic>>('POST', '/api/print/jobs/$id/approve', data: body);
+  }
+
+  Future<Map<String, dynamic>> rejectPrintJob(String id, String reason) async {
+    return _request<Map<String, dynamic>>(
+      'POST',
+      '/api/print/jobs/$id/reject',
+      data: {'reason': reason},
+    );
+  }
+
+  Future<Map<String, dynamic>> reprintPrintJob(String id) async {
+    return _request<Map<String, dynamic>>('POST', '/api/print/jobs/$id/reprint');
+  }
+
+  Future<Map<String, dynamic>> postPrintJobFinance(String id, String financeAccountId) async {
+    return _request<Map<String, dynamic>>(
+      'POST',
+      '/api/print/jobs/$id/post-finance',
+      data: {'finance_account_id': financeAccountId},
+    );
+  }
 }

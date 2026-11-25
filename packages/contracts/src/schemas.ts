@@ -310,7 +310,7 @@ export const updateEmployeeSchema = z.object({
 });
 
 export const presignUploadSchema = z.object({
-  category: z.enum(['receipt', 'selfie', 'product', 'avatar', 'release', 'portfolio']),
+  category: z.enum(['receipt', 'selfie', 'product', 'avatar', 'release', 'portfolio', 'print-jobs']),
   filename: z.string().trim().min(1).max(160),
   content_type: z.string().trim().min(3).max(120),
 });
@@ -324,6 +324,7 @@ export const sealRealtimeSchema = z.object({
     'erp:finance',
     'erp:inventory',
     'erp:attendance',
+    'erp:printer',
     'finance_accounts',
     'finance_transactions',
     'inventory_stocks',
@@ -618,7 +619,7 @@ export const updateAiFeatureConfigSchema = z
     is_enabled: z.boolean(),
     provider: aiProviderSchema,
     custom_endpoint: z.string().trim().max(500).nullable().optional(),
-    model: z.string().trim().min(1).max(140),
+    model: z.string().trim().max(140),
     api_key: z.string().trim().max(400).nullable().optional(),
     clear_api_key: z.boolean().optional().default(false),
     use_shared_key: z.boolean().optional().default(false),
@@ -634,6 +635,13 @@ export const updateAiFeatureConfigSchema = z
   .superRefine((data, ctx) => {
     const endpoint = data.custom_endpoint?.trim() ?? '';
     const usesShared = data.feature_key === 'portfolio_autofill' && data.use_shared_key;
+    if (!usesShared && data.model.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['model'],
+        message: 'Model ID wajib diisi.',
+      });
+    }
     if (data.provider === 'custom' && !usesShared && !endpoint) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -691,4 +699,190 @@ export const publicAiConsultRequestSchema = z.object({
     .min(1)
     .max(10),
   locale: z.string().trim().max(10).optional().default('id'),
+});
+
+// Smart Printer Otomatis schemas (BIGINT Rupiah, no float money)
+const printBigIntNonNegative = z
+  .union([z.number().int().nonnegative(), z.string().trim().regex(/^\d+$/), z.bigint().nonnegative()])
+  .transform((val) => BigInt(val));
+
+export const PRINT_PAPER_SIZES = ['a4', 'f4', 'legal', 'letter', 'a5', '4x6', '5x7'] as const;
+export const PRINT_COLOR_MODES = ['color', 'mono'] as const;
+export const PRINT_QUALITIES = ['draft', 'normal', 'high'] as const;
+export const PRINT_ORIENTATIONS = ['auto', 'portrait', 'landscape'] as const;
+export const PRINT_FITS = ['contain', 'cover', 'stretch'] as const;
+export const PRINT_JOB_STATUSES = [
+  'pending_approval',
+  'approved',
+  'queued',
+  'printing',
+  'printed',
+  'rejected',
+  'failed',
+  'cancelled',
+] as const;
+export const PRINT_JOB_SOURCES = ['whatsapp', 'manual_web', 'manual_mobile'] as const;
+export const PRINT_WA_OUTBOX_KINDS = [
+  'received',
+  'approved',
+  'printed',
+  'rejected',
+  'failed',
+] as const;
+
+export type PrintPaperSize = (typeof PRINT_PAPER_SIZES)[number];
+export type PrintColorMode = (typeof PRINT_COLOR_MODES)[number];
+export type PrintQuality = (typeof PRINT_QUALITIES)[number];
+export type PrintOrientation = (typeof PRINT_ORIENTATIONS)[number];
+export type PrintFit = (typeof PRINT_FITS)[number];
+export type PrintJobStatus = (typeof PRINT_JOB_STATUSES)[number];
+export type PrintJobSource = (typeof PRINT_JOB_SOURCES)[number];
+export type PrintWaOutboxKind = (typeof PRINT_WA_OUTBOX_KINDS)[number];
+
+const PAGE_RANGE_RE = /^\s*\d+(\s*-\s*\d+)?(\s*,\s*\d+(\s*-\s*\d+)?)*\s*$/;
+
+export const pageRangeSchema = z
+  .string()
+  .trim()
+  .max(100)
+  .refine(
+    (val) => val.length === 0 || PAGE_RANGE_RE.test(val),
+    'Format rentang halaman tidak valid (contoh: 1-3,5).',
+  )
+  .transform((val) => (val.length === 0 ? null : val))
+  .optional()
+  .nullable();
+
+export const createPrintDeviceSchema = z.object({
+  device_name: z.string().trim().min(2).max(120),
+  host: z.string().trim().max(120).optional().nullable(),
+  mdns_host: z.string().trim().max(160).optional().nullable(),
+  model: z.string().trim().max(120).optional().nullable(),
+});
+
+export const printAgentHeartbeatSchema = z.object({
+  printer_host: z.string().trim().max(120).optional().nullable(),
+  printer_model: z.string().trim().max(120).optional().nullable(),
+  printer_state: z.string().trim().max(64).optional().nullable(),
+  printer_state_reasons: z.array(z.string().trim().max(120)).max(20).optional().default([]),
+  ink_levels: z
+    .array(
+      z.object({
+        name: z.string().trim().max(80),
+        level: z.number().int().min(-1).max(100).nullable(),
+        color: z.string().trim().max(32).optional().nullable(),
+      }),
+    )
+    .max(12)
+    .optional()
+    .default([]),
+  openwa_status: z
+    .enum(['connected', 'qr_required', 'disconnected'])
+    .optional()
+    .default('disconnected'),
+  capabilities: z.record(z.unknown()).optional(),
+});
+
+export const printAgentPresignUploadSchema = z.object({
+  filename: z.string().trim().min(1).max(180),
+  content_type: z.string().trim().min(3).max(120),
+  file_size_bytes: z.coerce.number().int().positive().max(26_214_400).optional(),
+});
+
+export const printAgentIngestJobSchema = z.object({
+  wa_message_id: z.string().trim().min(1).max(180),
+  wa_chat_id: z.string().trim().min(3).max(120),
+  customer_name: z.string().trim().max(120).optional().nullable(),
+  customer_phone: z.string().trim().max(64).optional().nullable(),
+  customer_note: z.string().trim().max(500).optional().nullable(),
+  file_name: z.string().trim().min(1).max(200),
+  file_mime: z.string().trim().min(3).max(120),
+  file_size_bytes: printBigIntNonNegative,
+  file_object_key: z.string().trim().min(5).max(255),
+  detected_page_count: z.number().int().positive().max(2000).optional().default(1),
+});
+
+export const createManualPrintJobSchema = z.object({
+  file_name: z.string().trim().min(1).max(200),
+  file_mime: z.string().trim().min(3).max(120),
+  file_size_bytes: printBigIntNonNegative,
+  file_object_key: z.string().trim().min(5).max(255),
+  detected_page_count: z.number().int().positive().max(2000).optional().default(1),
+  customer_name: z.string().trim().max(120).optional().nullable(),
+  customer_phone: z.string().trim().max(64).optional().nullable(),
+  customer_note: z.string().trim().max(500).optional().nullable(),
+  paper_size: z.enum(PRINT_PAPER_SIZES).optional().default('a4'),
+  color_mode: z.enum(PRINT_COLOR_MODES).optional().default('color'),
+  quality: z.enum(PRINT_QUALITIES).optional().default('normal'),
+  copies: z.number().int().min(1).max(99).optional().default(1),
+  orientation: z.enum(PRINT_ORIENTATIONS).optional().default('auto'),
+  fit: z.enum(PRINT_FITS).optional().default('contain'),
+  borderless: z.boolean().optional().default(false),
+  duplex: z.boolean().optional().default(false),
+  page_range: pageRangeSchema,
+  discount_amount: printBigIntNonNegative.optional().default(0n),
+  auto_approve: z.boolean().optional().default(false),
+  auto_post_finance: z.boolean().optional().default(false),
+  finance_account_id: z.string().uuid().optional().nullable(),
+  device_id: z.string().uuid().optional().nullable(),
+  source: z.enum(['manual_web', 'manual_mobile']).optional().default('manual_web'),
+});
+
+export const updatePrintJobOptionsSchema = z.object({
+  paper_size: z.enum(PRINT_PAPER_SIZES).optional(),
+  color_mode: z.enum(PRINT_COLOR_MODES).optional(),
+  quality: z.enum(PRINT_QUALITIES).optional(),
+  copies: z.number().int().min(1).max(99).optional(),
+  orientation: z.enum(PRINT_ORIENTATIONS).optional(),
+  fit: z.enum(PRINT_FITS).optional(),
+  borderless: z.boolean().optional(),
+  duplex: z.boolean().optional(),
+  page_range: pageRangeSchema,
+  discount_amount: printBigIntNonNegative.optional(),
+  detected_page_count: z.number().int().positive().max(2000).optional(),
+});
+
+export const approvePrintJobSchema = z.object({
+  paper_size: z.enum(PRINT_PAPER_SIZES).optional(),
+  color_mode: z.enum(PRINT_COLOR_MODES).optional(),
+  quality: z.enum(PRINT_QUALITIES).optional(),
+  copies: z.number().int().min(1).max(99).optional(),
+  orientation: z.enum(PRINT_ORIENTATIONS).optional(),
+  fit: z.enum(PRINT_FITS).optional(),
+  borderless: z.boolean().optional(),
+  duplex: z.boolean().optional(),
+  page_range: pageRangeSchema,
+  discount_amount: printBigIntNonNegative.optional(),
+  device_id: z.string().uuid().optional().nullable(),
+  auto_post_finance: z.boolean().optional().default(false),
+  finance_account_id: z.string().uuid().optional().nullable(),
+});
+
+export const rejectPrintJobSchema = z.object({
+  reason: z.string().trim().min(2).max(400),
+});
+
+export const postPrintJobFinanceSchema = z.object({
+  finance_account_id: z.string().uuid(),
+});
+
+export const printAgentJobResultSchema = z.object({
+  status: z.enum(['printed', 'failed']),
+  ipp_job_id: z.number().int().nonnegative().optional().nullable(),
+  error_message: z.string().trim().max(500).optional().nullable(),
+  rendered_pages: z.number().int().positive().optional().nullable(),
+  dry_run: z.boolean().optional().default(false),
+});
+
+export const upsertPrintPricingRuleSchema = z.object({
+  paper_size: z.enum(PRINT_PAPER_SIZES),
+  color_mode: z.enum(PRINT_COLOR_MODES),
+  price_per_page: printBigIntNonNegative,
+  duplex_discount_per_page: printBigIntNonNegative.optional().default(0n),
+  is_active: z.boolean().optional().default(true),
+});
+
+export const printAgentOutboxAckSchema = z.object({
+  status: z.enum(['sent', 'failed']),
+  error_message: z.string().trim().max(500).optional().nullable(),
 });

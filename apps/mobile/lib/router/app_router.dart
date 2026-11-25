@@ -14,6 +14,7 @@ import '../features/finance/finance_screen.dart';
 import '../features/inventory/inventory_screen.dart';
 import '../features/payroll/payroll_screen.dart';
 import '../features/permissions/permission_setup_screen.dart';
+import '../features/printer/printer_screen.dart';
 import '../features/profile/profile_screen.dart';
 import '../features/rbac/rbac_audit_screen.dart';
 import '../features/shell/floating_nav_shell.dart';
@@ -86,6 +87,15 @@ final routerProvider = Provider<GoRouter>((ref) {
           state,
           _ProfileBoundScreen(
             builder: (profile) => ProfileScreen(profile: profile),
+          ),
+        ),
+      ),
+      GoRoute(
+        path: '/printer',
+        pageBuilder: (context, state) => _fadePage(
+          state,
+          _ProfileBoundScreen(
+            builder: (profile) => PrinterScreen(profile: profile),
           ),
         ),
       ),

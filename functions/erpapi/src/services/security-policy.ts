@@ -17,6 +17,10 @@ export function isSafePortfolioObjectKey(key: string): boolean {
   return isSafeObjectKey(key) && key.startsWith('portfolio/');
 }
 
+export function isSafePrintObjectKey(key: string): boolean {
+  return isSafeObjectKey(key) && key.startsWith('print-jobs/');
+}
+
 export function slugifyPortfolioTitle(input: string): string {
   return input
     .toLowerCase()
@@ -106,6 +110,12 @@ export async function authorizeStorageDownload(
     return segments.length >= 3 && hasPermission(input.permissions, 'portfolio', 'view')
       ? { allowed: true }
       : { allowed: false, reason: 'missing_portfolio_view' };
+  }
+
+  if (top === 'print-jobs') {
+    return segments.length >= 2 && hasPermission(input.permissions, 'printer', 'view')
+      ? { allowed: true }
+      : { allowed: false, reason: 'missing_printer_view' };
   }
 
   return { allowed: false, reason: 'forbidden_prefix' };

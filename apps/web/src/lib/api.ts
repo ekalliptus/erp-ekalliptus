@@ -709,6 +709,7 @@ export type RealtimeFeed =
   | 'erp:finance'
   | 'erp:inventory'
   | 'erp:attendance'
+  | 'erp:printer'
   | 'finance_accounts'
   | 'finance_transactions'
   | 'inventory_stocks'
@@ -950,6 +951,107 @@ export interface PortfolioAutofillResponse {
     latency_ms: number;
     total_tokens: number | null;
   };
+}
+
+export interface PrintInkLevel {
+  name: string;
+  level: number | null;
+  color?: string | null;
+}
+
+export interface PrintDeviceRow {
+  id: string;
+  device_name: string;
+  host: string | null;
+  mdns_host: string | null;
+  model: string;
+  is_active: boolean;
+  is_online: boolean;
+  last_heartbeat_at: string | null;
+  printer_state: string;
+  printer_state_reasons: string[];
+  ink_levels: PrintInkLevel[];
+  openwa_status: 'connected' | 'qr_required' | 'disconnected' | string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PrintPricingRuleRow {
+  id: string;
+  paper_size: 'a4' | 'f4' | 'legal' | 'letter' | 'a5' | '4x6' | '5x7';
+  color_mode: 'color' | 'mono';
+  price_per_page: string;
+  duplex_discount_per_page: string;
+  currency: string;
+  is_active: boolean;
+  updated_at: string;
+}
+
+export type PrintJobStatus =
+  | 'pending_approval'
+  | 'approved'
+  | 'queued'
+  | 'printing'
+  | 'printed'
+  | 'rejected'
+  | 'failed'
+  | 'cancelled';
+
+export interface PrintJobRow {
+  id: string;
+  job_code: string;
+  source: 'whatsapp' | 'manual_web' | 'manual_mobile';
+  device_id: string | null;
+  wa_message_id: string | null;
+  wa_chat_id: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  customer_note: string | null;
+  file_name: string;
+  file_mime: string;
+  file_size_bytes: string;
+  file_object_key: string;
+  detected_page_count: number;
+  paper_size: PrintPricingRuleRow['paper_size'];
+  color_mode: PrintPricingRuleRow['color_mode'];
+  quality: 'draft' | 'normal' | 'high';
+  copies: number;
+  orientation: 'auto' | 'portrait' | 'landscape';
+  fit: 'contain' | 'cover' | 'stretch';
+  borderless: boolean;
+  duplex: boolean;
+  page_range: string | null;
+  pages_to_print: number;
+  unit_price_per_page: string;
+  discount_amount: string;
+  total_price: string;
+  status: PrintJobStatus;
+  reject_reason: string | null;
+  ipp_job_id: number | null;
+  error_message: string | null;
+  finance_account_id: string | null;
+  finance_transaction_id: string | null;
+  finance_posted_at: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  printed_at: string | null;
+  file_deleted_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PrintJobsSummary {
+  pending_approval: number;
+  queued: number;
+  printing: number;
+  printed_today: number;
+  revenue_today: string;
+}
+
+export interface PrintJobsResponse {
+  jobs: PrintJobRow[];
+  summary: PrintJobsSummary;
 }
 
 export const erpApi = {
@@ -1380,7 +1482,7 @@ export const erpApi = {
 
   storage: {
     presignUpload: (body: {
-      category: 'receipt' | 'selfie' | 'product' | 'avatar' | 'release' | 'portfolio';
+      category: 'receipt' | 'selfie' | 'product' | 'avatar' | 'release' | 'portfolio' | 'print-jobs';
       filename: string;
       content_type: string;
     }) =>
@@ -1443,6 +1545,140 @@ export const erpApi = {
       apiFetch<PortfolioAutofillResponse>('/api/ai/portfolio-autofill', {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+  },
+
+  printer: {
+    devices: () => apiFetch<{ devices: PrintDeviceRow[] }>('/api/print/devices'),
+    registerDevice: (body: {
+      device_name: string;
+      host?: string | null;
+      mdns_host?: string | null;
+      model?: string | null;
+    }) =>
+      apiFetch<{ device: PrintDeviceRow; agent_token: string }>('/api/print/devices', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    rotateDeviceToken: (id: string) =>
+      apiFetch<{ device: PrintDeviceRow; agent_token: string }>(
+        `/api/print/devices/${id}/rotate-token`,
+        { method: 'POST' },
+      ),
+    pricing: () => apiFetch<{ pricing_rules: PrintPricingRuleRow[] }>('/api/print/pricing'),
+    upsertPricing: (body: {
+      paper_size: PrintPricingRuleRow['paper_size'];
+      color_mode: PrintPricingRuleRow['color_mode'];
+      price_per_page: string | number;
+      duplex_discount_per_page?: string | number;
+      is_active?: boolean;
+    }) =>
+      apiFetch<{ pricing_rule: PrintPricingRuleRow }>('/api/print/pricing', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    jobs: (params?: { status?: string; source?: string; q?: string; limit?: number }) => {
+      const qs = new URLSearchParams();
+      if (params?.status && params.status !== 'all') qs.set('status', params.status);
+      if (params?.source && params.source !== 'all') qs.set('source', params.source);
+      if (params?.q?.trim()) qs.set('q', params.q.trim());
+      if (params?.limit) qs.set('limit', String(params.limit));
+      const suffix = qs.toString() ? `?${qs.toString()}` : '';
+      return apiFetch<PrintJobsResponse>(`/api/print/jobs${suffix}`);
+    },
+    jobDetail: (id: string) =>
+      apiFetch<{ job: PrintJobRow; download_url: string | null }>(`/api/print/jobs/${id}`),
+    createManualJob: (body: {
+      file_name: string;
+      file_mime: string;
+      file_size_bytes: number | string;
+      file_object_key: string;
+      detected_page_count?: number;
+      customer_name?: string | null;
+      customer_phone?: string | null;
+      customer_note?: string | null;
+      paper_size?: PrintPricingRuleRow['paper_size'];
+      color_mode?: PrintPricingRuleRow['color_mode'];
+      quality?: PrintJobRow['quality'];
+      copies?: number;
+      orientation?: PrintJobRow['orientation'];
+      fit?: PrintJobRow['fit'];
+      borderless?: boolean;
+      duplex?: boolean;
+      page_range?: string | null;
+      discount_amount?: string | number;
+      auto_approve?: boolean;
+      auto_post_finance?: boolean;
+      finance_account_id?: string | null;
+      device_id?: string | null;
+      source?: 'manual_web' | 'manual_mobile';
+    }) =>
+      apiFetch<{ job: PrintJobRow }>('/api/print/jobs/manual', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    updateJobOptions: (
+      id: string,
+      body: {
+        paper_size?: PrintPricingRuleRow['paper_size'];
+        color_mode?: PrintPricingRuleRow['color_mode'];
+        quality?: PrintJobRow['quality'];
+        copies?: number;
+        orientation?: PrintJobRow['orientation'];
+        fit?: PrintJobRow['fit'];
+        borderless?: boolean;
+        duplex?: boolean;
+        page_range?: string | null;
+        discount_amount?: string | number;
+        detected_page_count?: number;
+      },
+    ) =>
+      apiFetch<{ job: PrintJobRow }>(`/api/print/jobs/${id}/options`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    approveJob: (
+      id: string,
+      body?: {
+        paper_size?: PrintPricingRuleRow['paper_size'];
+        color_mode?: PrintPricingRuleRow['color_mode'];
+        quality?: PrintJobRow['quality'];
+        copies?: number;
+        orientation?: PrintJobRow['orientation'];
+        fit?: PrintJobRow['fit'];
+        borderless?: boolean;
+        duplex?: boolean;
+        page_range?: string | null;
+        discount_amount?: string | number;
+        device_id?: string | null;
+        auto_post_finance?: boolean;
+        finance_account_id?: string | null;
+      },
+    ) =>
+      apiFetch<{ job: PrintJobRow }>(`/api/print/jobs/${id}/approve`, {
+        method: 'POST',
+        body: JSON.stringify(body ?? {}),
+      }),
+    rejectJob: (id: string, reason: string) =>
+      apiFetch<{ job: PrintJobRow }>(`/api/print/jobs/${id}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      }),
+    reprintJob: (id: string) =>
+      apiFetch<{ job: PrintJobRow }>(`/api/print/jobs/${id}/reprint`, {
+        method: 'POST',
+      }),
+    postFinance: (id: string, finance_account_id: string) =>
+      apiFetch<{ job: PrintJobRow; account_balance: string }>(
+        `/api/print/jobs/${id}/post-finance`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ finance_account_id }),
+        },
+      ),
+    deleteJobFile: (id: string) =>
+      apiFetch<{ job: PrintJobRow }>(`/api/print/jobs/${id}/file`, {
+        method: 'DELETE',
       }),
   },
 
@@ -1569,7 +1805,14 @@ export const erpApi = {
 };
 
 export async function uploadFileViaPresign(
-  category: 'receipt' | 'selfie' | 'product' | 'avatar' | 'release' | 'portfolio',
+  category:
+    | 'receipt'
+    | 'selfie'
+    | 'product'
+    | 'avatar'
+    | 'release'
+    | 'portfolio'
+    | 'print-jobs',
   file: File,
 ): Promise<string> {
   const contentType = file.type || 'application/octet-stream';

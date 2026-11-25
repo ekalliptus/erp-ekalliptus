@@ -14,6 +14,7 @@ import '../common/app_update_dialog.dart';
 import '../common/erp_widgets.dart';
 import '../common/shimmer_skeleton.dart';
 import '../common/theme_transition.dart';
+import '../printer/printer_providers.dart';
 import '../profile/profile_models.dart';
 import '../profile/profile_screen.dart';
 
@@ -126,6 +127,13 @@ class _FloatingNavShellState extends ConsumerState<FloatingNavShell> {
       case 'rbac':
       case 'audit':
         _navigateToDestination(context, ErpDestination.rbacAudit);
+      case 'printer':
+        if (widget.profile.hasPermission('printer', 'view')) {
+          final router = GoRouter.maybeOf(context);
+          if (router != null) {
+            router.push('/printer');
+          }
+        }
       case 'app_update':
         unawaited(_checkAppUpdate(force: true));
       default:
@@ -164,6 +172,9 @@ class _FloatingNavShellState extends ConsumerState<FloatingNavShell> {
     final t = EucalyptusTokens.of(context);
     final profile = widget.profile;
     final overflow = profile.overflowDestinations();
+    final pendingPrintCount = profile.hasPermission('printer', 'view')
+        ? (ref.read(pendingPrintApprovalCountProvider).valueOrNull ?? 0)
+        : 0;
 
     showModalBottomSheet<void>(
       context: context,
@@ -218,6 +229,30 @@ class _FloatingNavShellState extends ConsumerState<FloatingNavShell> {
                     onTap: () {
                       Navigator.of(ctx).pop();
                       _navigateToDestination(context, ErpDestination.inventory);
+                    },
+                  ),
+                ),
+              if (profile.hasPermission('printer', 'view'))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: ErpListRowCard(
+                    leadingIcon: Icons.print_outlined,
+                    title: 'Smart Printer',
+                    subtitle: pendingPrintCount > 0
+                        ? '$pendingPrintCount dokumen menunggu approval'
+                        : 'Antrean cetak WA & HP Smart Tank 583',
+                    trailing: pendingPrintCount > 0
+                        ? ErpBadge(
+                            label: '$pendingPrintCount',
+                            tone: ErpBadgeTone.warning,
+                          )
+                        : const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      final router = GoRouter.maybeOf(context);
+                      if (router != null) {
+                        router.push('/printer');
+                      }
                     },
                   ),
                 ),
@@ -294,6 +329,9 @@ class _FloatingNavShellState extends ConsumerState<FloatingNavShell> {
     final tabs = profile.primaryBottomTabs();
     final pendingCountAsync = ref.watch(pendingOfflineCountProvider);
     final pendingCount = pendingCountAsync.valueOrNull ?? 0;
+    final pendingPrintCount = profile.hasPermission('printer', 'view')
+        ? (ref.watch(pendingPrintApprovalCountProvider).valueOrNull ?? 0)
+        : 0;
     final canAttendance = profile.hasPermission('attendance', 'view');
 
     final leftTabs = tabs.length >= 2
@@ -350,7 +388,12 @@ class _FloatingNavShellState extends ConsumerState<FloatingNavShell> {
           IconButton(
             tooltip: 'Aksi Cepat & Modul Lainnya',
             onPressed: () => _openQuickActionCenter(context),
-            icon: const Icon(Icons.apps_rounded),
+            icon: pendingPrintCount > 0
+                ? Badge(
+                    label: Text('$pendingPrintCount'),
+                    child: const Icon(Icons.apps_rounded),
+                  )
+                : const Icon(Icons.apps_rounded),
           ),
           _NotificationsBellButton(
             onOpenModule: (module) => _navigateToModuleName(context, module),
@@ -781,6 +824,8 @@ String _notificationModuleLabel(String module) {
       return 'Absensi';
     case 'payroll':
       return 'Gaji';
+    case 'printer':
+      return 'Printer';
     case 'app_update':
       return 'Pembaruan';
     default:
@@ -932,6 +977,9 @@ class _FcmForegroundListenerState extends ConsumerState<_FcmForegroundListener> 
     final module = (message.data['module'] ?? '').toString().trim();
     if (module == 'app_update') {
       unawaited(_refreshUpdateCheckState());
+    } else if (module == 'printer') {
+      ref.invalidate(pendingPrintApprovalCountProvider);
+      ref.invalidate(printerDashboardProvider);
     }
     final notification = message.notification;
     final title = notification?.title ?? (message.data['title']?.toString() ?? 'MyEkalliptus');

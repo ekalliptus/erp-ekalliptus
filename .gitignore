@@ -17,6 +17,14 @@ coverage/
 apps/mobile/build/
 apps/mobile/.dart_tool/
 legacy/.env.backup
-
 # Firebase service account (di luar git)
 .secrets/
+# OpenWA local session & print bridge env
+.openwa-session/
+services/print-bridge/.env
+
+# managed
+**.data.json
+**.node-persist**
+**_IGNORE_**
+# end managed

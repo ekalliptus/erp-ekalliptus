@@ -16,6 +16,7 @@ const MODULE_LABEL: Record<string, string> = {
   inventory: 'Stok',
   attendance: 'Absensi',
   payroll: 'Gaji',
+  printer: 'Printer',
   app_update: 'Pembaruan',
 };
 
@@ -35,6 +36,8 @@ export function NotificationsBell() {
       void qc.invalidateQueries({ queryKey: ['notifications'] });
       if (payload.data?.module === 'app_update') {
         void qc.invalidateQueries({ queryKey: ['app', 'version'] });
+      } else if (payload.data?.module === 'printer') {
+        void qc.invalidateQueries({ queryKey: ['printer'] });
       }
     });
   }, [qc]);

@@ -26,7 +26,7 @@ export async function writeAuditLog(executor: DbExecutor, input: AuditInput): Pr
   });
 }
 
-export type ErpChannel = 'erp:finance' | 'erp:inventory' | 'erp:attendance';
+export type ErpChannel = 'erp:finance' | 'erp:inventory' | 'erp:attendance' | 'erp:printer';
 
 export async function emitErpEvent(
   executor: DbExecutor,

@@ -594,9 +594,14 @@ export function AiManagementPage({ me }: { me: MeResponse }) {
                       disabled={!canUpdate}
                       value={currentForm.customEndpoint}
                       onChange={(e) => patchCurrent({ customEndpoint: e.target.value })}
-                      placeholder="https://api.provider-anda.com/v1/chat/completions"
+                      placeholder="https://router.ekalliptus.com/v1 atau .../v1/chat/completions"
                       className="h-11 w-full rounded-md border border-border bg-surface px-3 font-mono text-xs text-text-primary placeholder:text-text-secondary focus:border-accent focus:outline-none"
                     />
+                    <p className="text-[11px] text-text-secondary">
+                      Base URL OpenAI-compatible seperti{' '}
+                      <span className="font-mono">/v1</span> otomatis diarahkan ke{' '}
+                      <span className="font-mono">/chat/completions</span>.
+                    </p>
                   </div>
                 ) : (
                   <p className="text-[11px] text-text-secondary">
@@ -614,16 +619,20 @@ export function AiManagementPage({ me }: { me: MeResponse }) {
                     htmlFor={`${baseId}-model`}
                     className="block text-xs font-semibold text-text-primary"
                   >
-                    Model ID *
+                    Model ID {inheritsConsultKey ? '(Opsional, ikuti Konsultasi)' : '*'}
                   </label>
                   <input
                     id={`${baseId}-model`}
                     type="text"
-                    required
+                    required={!inheritsConsultKey}
                     disabled={!canUpdate}
                     value={currentForm.model}
                     onChange={(e) => patchCurrent({ model: e.target.value })}
-                    placeholder="glm-4.5-air"
+                    placeholder={
+                      inheritsConsultKey && consultForm?.model
+                        ? `Default: ${consultForm.model}`
+                        : 'glm-4.5-air'
+                    }
                     className="h-11 w-full rounded-md border border-border bg-canvas px-3 font-mono text-xs text-text-primary focus:border-accent focus:outline-none"
                   />
                 </div>

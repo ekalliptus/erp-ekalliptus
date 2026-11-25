@@ -9,6 +9,7 @@ import {
   buildPortfolioAutofillMessages,
   isSafeAiEndpointUrl,
   parsePortfolioAutofillJson,
+  resolveEndpointUrl,
 } from '../services/ai-provider.js';
 
 describe('AI key encryption & masking', () => {
@@ -43,6 +44,24 @@ describe('AI endpoint SSRF validator & autofill JSON parser', () => {
     assert.equal(isSafeAiEndpointUrl('https://10.0.0.5/v1/chat'), false);
     assert.equal(isSafeAiEndpointUrl('https://user:pass@api.openai.com/v1'), false);
     assert.equal(isSafeAiEndpointUrl('https://api.openai.com:8443/v1'), false);
+  });
+
+  it('normalizes OpenAI-compatible custom base URLs by appending /chat/completions', () => {
+    assert.equal(
+      resolveEndpointUrl('custom', 'https://router.ekalliptus.com/v1'),
+      'https://router.ekalliptus.com/v1/chat/completions',
+    );
+    assert.equal(
+      resolveEndpointUrl('custom', 'https://router.ekalliptus.com/v1/'),
+      'https://router.ekalliptus.com/v1/chat/completions',
+    );
+    assert.equal(
+      resolveEndpointUrl('custom', 'https://router.ekalliptus.com/v1/chat/completions'),
+      'https://router.ekalliptus.com/v1/chat/completions',
+    );
+    assert.equal(resolveEndpointUrl('custom', 'http://router.ekalliptus.com/v1'), null);
+    assert.equal(resolveEndpointUrl('custom', 'https://localhost/v1'), null);
+    assert.equal(resolveEndpointUrl('custom', 'https://192.168.0.5/v1'), null);
   });
 
   it('parses fenced JSON draft, enforces web_mobile category, and strips em dashes', () => {

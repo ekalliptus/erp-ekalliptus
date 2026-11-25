@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
@@ -101,4 +102,13 @@ export async function objectExists(key: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function deleteObject(key: string): Promise<void> {
+  await getS3Client().send(
+    new DeleteObjectCommand({
+      Bucket: getBucketName(),
+      Key: key,
+    }),
+  );
 }

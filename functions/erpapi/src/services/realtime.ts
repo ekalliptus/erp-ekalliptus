@@ -117,7 +117,7 @@ export function attendancesLiveQuery(employeeId?: string) {
 }
 
 export function erpEventsLiveQuery(
-  channel: 'erp:finance' | 'erp:inventory' | 'erp:attendance',
+  channel: 'erp:finance' | 'erp:inventory' | 'erp:attendance' | 'erp:printer',
   employeeId?: string,
 ) {
   const condition =

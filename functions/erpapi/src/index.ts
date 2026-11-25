@@ -29,6 +29,7 @@ import { inventoryPlugin } from './modules/inventory.js';
 import { payrollPlugin } from './modules/payroll.js';
 import { registerErpPlugins } from './modules/plugin.js';
 import { portfolioPlugin, publicPortfolioPlugin } from './modules/portfolio.js';
+import { printAgentPlugin, printerPlugin } from './modules/printer.js';
 import { profilePlugin } from './modules/profile.js';
 import { rbacPlugin } from './modules/rbac.js';
 import { realtimePlugin } from './modules/realtime.js';
@@ -193,6 +194,7 @@ app.use('/api/*', async (c, next) => {
     c.req.path === '/api/auth/username-lookup' ||
     c.req.path === '/api/auth/claim-preview' ||
     c.req.path === '/api/auth/claim' ||
+    c.req.path.startsWith('/api/print-agent/') ||
     (c.req.path === '/api/public/ai/consult-config' && c.req.method === 'GET') ||
     (c.req.path === '/api/public/ai/consult' && c.req.method === 'POST') ||
     ((c.req.path === '/api/app/version' ||
@@ -309,6 +311,8 @@ registerErpPlugins(apiRouter, [
   publicAiPlugin,
   portfolioPlugin,
   publicPortfolioPlugin,
+  printerPlugin,
+  printAgentPlugin,
   profilePlugin,
   financePlugin,
   inventoryPlugin,

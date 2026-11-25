@@ -9,6 +9,7 @@ import {
   finance_categories,
   office_locations,
   permissions,
+  print_pricing_rules,
   role_permissions,
   roles,
   warehouses,
@@ -17,7 +18,17 @@ import {
 config({ path: '.env.local' });
 config({ path: '.env' });
 
-const MODULES = ['finance', 'inventory', 'attendance', 'payroll', 'rbac', 'audit', 'portfolio', 'ai'] as const;
+const MODULES = [
+  'finance',
+  'inventory',
+  'attendance',
+  'payroll',
+  'rbac',
+  'audit',
+  'portfolio',
+  'ai',
+  'printer',
+] as const;
 const ACTIONS = ['view', 'create', 'update', 'delete', 'approve', 'export'] as const;
 
 const ROLE_DEFS = [
@@ -57,6 +68,9 @@ const ROLE_MATRIX: Record<string, Array<[string, string]>> = {
     ['payroll', 'export'],
     ['attendance', 'view'],
     ['audit', 'view'],
+    ['printer', 'view'],
+    ['printer', 'approve'],
+    ['printer', 'update'],
   ],
   warehouse: [
     ...ACTIONS.map((a) => ['inventory', a] as [string, string]),
@@ -79,6 +93,9 @@ const ROLE_MATRIX: Record<string, Array<[string, string]>> = {
     ['attendance', 'create'],
     ['inventory', 'view'],
     ['payroll', 'view'],
+    ['printer', 'view'],
+    ['printer', 'create'],
+    ['printer', 'approve'],
   ],
 };
 
@@ -204,6 +221,7 @@ export async function runSeed() {
         { name: 'Penjualan Layanan Digital', kind: 'income' },
         { name: 'Pembayaran Invoice Klien', kind: 'income' },
         { name: 'Penjualan Produk Hardware', kind: 'income' },
+        { name: 'Jasa Cetak & Print', kind: 'income' },
         { name: 'Biaya Operasional Kantor', kind: 'expense' },
         { name: 'Penggajian Karyawan', kind: 'expense' },
         { name: 'Pembelian Stok & Supplier', kind: 'expense' },
@@ -214,6 +232,35 @@ export async function runSeed() {
           .insert(finance_categories)
           .values(cat)
           .onConflictDoNothing({ target: [finance_categories.name, finance_categories.kind] });
+      }
+
+      const defaultPrintPricing = [
+        { paper_size: 'a4', color_mode: 'mono', price_per_page: 500n, duplex_discount_per_page: 0n },
+        { paper_size: 'a4', color_mode: 'color', price_per_page: 1500n, duplex_discount_per_page: 0n },
+        { paper_size: 'f4', color_mode: 'mono', price_per_page: 600n, duplex_discount_per_page: 0n },
+        { paper_size: 'f4', color_mode: 'color', price_per_page: 1800n, duplex_discount_per_page: 0n },
+        { paper_size: 'legal', color_mode: 'mono', price_per_page: 600n, duplex_discount_per_page: 0n },
+        { paper_size: 'legal', color_mode: 'color', price_per_page: 1800n, duplex_discount_per_page: 0n },
+        { paper_size: 'letter', color_mode: 'mono', price_per_page: 500n, duplex_discount_per_page: 0n },
+        { paper_size: 'letter', color_mode: 'color', price_per_page: 1500n, duplex_discount_per_page: 0n },
+        { paper_size: 'a5', color_mode: 'mono', price_per_page: 400n, duplex_discount_per_page: 0n },
+        { paper_size: 'a5', color_mode: 'color', price_per_page: 1000n, duplex_discount_per_page: 0n },
+        { paper_size: '4x6', color_mode: 'mono', price_per_page: 2000n, duplex_discount_per_page: 0n },
+        { paper_size: '4x6', color_mode: 'color', price_per_page: 3500n, duplex_discount_per_page: 0n },
+        { paper_size: '5x7', color_mode: 'mono', price_per_page: 3000n, duplex_discount_per_page: 0n },
+        { paper_size: '5x7', color_mode: 'color', price_per_page: 5000n, duplex_discount_per_page: 0n },
+      ];
+      for (const rule of defaultPrintPricing) {
+        await tx
+          .insert(print_pricing_rules)
+          .values({
+            ...rule,
+            currency: 'IDR',
+            is_active: true,
+          })
+          .onConflictDoNothing({
+            target: [print_pricing_rules.paper_size, print_pricing_rules.color_mode],
+          });
       }
 
       await tx

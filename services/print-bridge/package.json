@@ -1,0 +1,17 @@
+{
+  "name": "@ekalliptus/print-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "dry-run": "node src/index.mjs --dry-run",
+    "verify-printer": "node src/index.mjs --verify-printer",
+    "test": "node --test test/bridge.test.mjs"
+  },
+  "dependencies": {
+    "@open-wa/wa-automate": "^4.74.0",
+    "dotenv": "^16.4.7",
+    "pdf-lib": "^1.17.1"
+  }
+}

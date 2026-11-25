@@ -7,6 +7,7 @@ import {
   FileSpreadsheet,
   Fingerprint,
   LayoutDashboard,
+  Printer,
   Search,
   ShieldCheck,
   Store,
@@ -109,6 +110,16 @@ export function CommandPalette({
         hint: 'Upload & kelola katalog project untuk web ekalliptus.com',
         path: '/portfolio',
         icon: Briefcase,
+      });
+    }
+    if (hasPermission(perms, 'printer', 'view')) {
+      list.push({
+        id: 'nav-printer',
+        group: 'Navigasi',
+        label: 'Smart Printer',
+        hint: 'Antrean cetak WA & manual, preview, approval HP Smart Tank 583 & kas',
+        path: '/printer',
+        icon: Printer,
       });
     }
     if (hasPermission(perms, 'ai', 'view')) {
