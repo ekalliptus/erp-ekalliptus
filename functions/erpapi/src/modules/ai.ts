@@ -87,7 +87,7 @@ async function ensureAiDefaultRows() {
         use_shared_key: true,
         system_prompt: DEFAULT_PORTFOLIO_SYSTEM_PROMPT,
         temperature: 0.4,
-        max_tokens: 1200,
+        max_tokens: 2500,
         assistant_name: 'eBot',
         greeting_message: '',
         handoff_phrases: [],
@@ -395,15 +395,47 @@ adminRouter.post('/test', requirePermission('ai', 'update'), async (c) => {
           { role: 'user', content: parsed.data.prompt },
         ];
 
-  const completion = await callAiChatCompletion({
+  const initialMaxTokens =
+    parsed.data.feature_key === 'portfolio_autofill'
+      ? Math.min(4096, Math.max(Number(eff.configRow.max_tokens ?? 2500), 2048))
+      : Number(eff.configRow.max_tokens ?? 512);
+
+  let completion = await callAiChatCompletion({
     provider: eff.provider,
     endpoint: eff.endpoint,
     apiKey: eff.apiKey,
     model: eff.model,
     messages,
     temperature: Number(eff.configRow.temperature ?? 0.7),
-    maxTokens: Number(eff.configRow.max_tokens ?? 512),
+    maxTokens: initialMaxTokens,
   });
+
+  let parsedPreview: unknown = null;
+  if (completion.ok && parsed.data.feature_key === 'portfolio_autofill') {
+    try {
+      parsedPreview = parsePortfolioAutofillJson(completion.content);
+    } catch {
+      if (completion.finishReason === 'length' && initialMaxTokens < 4096) {
+        const retried = await callAiChatCompletion({
+          provider: eff.provider,
+          endpoint: eff.endpoint,
+          apiKey: eff.apiKey,
+          model: eff.model,
+          messages,
+          temperature: Number(eff.configRow.temperature ?? 0.7),
+          maxTokens: 4096,
+        });
+        completion = retried;
+        if (completion.ok) {
+          try {
+            parsedPreview = parsePortfolioAutofillJson(completion.content);
+          } catch {
+            parsedPreview = null;
+          }
+        }
+      }
+    }
+  }
 
   await recordAiUsage({
     featureKey: parsed.data.feature_key,
@@ -430,15 +462,6 @@ adminRouter.post('/test', requirePermission('ai', 'update'), async (c) => {
       },
       502,
     );
-  }
-
-  let parsedPreview: unknown = null;
-  if (parsed.data.feature_key === 'portfolio_autofill') {
-    try {
-      parsedPreview = parsePortfolioAutofillJson(completion.content);
-    } catch {
-      parsedPreview = null;
-    }
   }
 
   return c.json({
@@ -548,15 +571,18 @@ adminRouter.post('/portfolio-autofill', async (c) => {
     eff.configRow.extra_instructions,
   );
 
-  const completion = await callAiChatCompletion({
+  const initialMaxTokens = Math.min(4096, Math.max(Number(eff.configRow.max_tokens ?? 2500), 2048));
+  let totalLatencyMs = 0;
+  let completion = await callAiChatCompletion({
     provider: eff.provider,
     endpoint: eff.endpoint,
     apiKey: eff.apiKey,
     model: eff.model,
     messages,
     temperature: Number(eff.configRow.temperature ?? 0.4),
-    maxTokens: Number(eff.configRow.max_tokens ?? 1200),
+    maxTokens: initialMaxTokens,
   });
+  totalLatencyMs += completion.latencyMs;
 
   if (!completion.ok) {
     await recordAiUsage({
@@ -564,7 +590,7 @@ adminRouter.post('/portfolio-autofill', async (c) => {
       provider: eff.provider,
       model: eff.model,
       status: 'error',
-      latencyMs: completion.latencyMs,
+      latencyMs: totalLatencyMs,
       errorMessage: completion.error,
       actorId: auth.employee.id,
       source: 'erp-portfolio',
@@ -572,14 +598,53 @@ adminRouter.post('/portfolio-autofill', async (c) => {
     return c.json({ error: completion.error }, 502);
   }
 
+  let draft: ReturnType<typeof parsePortfolioAutofillJson> | null = null;
+  let lastParseErr = '';
   try {
-    const draft = parsePortfolioAutofillJson(completion.content);
+    draft = parsePortfolioAutofillJson(completion.content);
+  } catch (err) {
+    lastParseErr = err instanceof Error ? err.message : 'Gagal membaca output JSON dari AI.';
+    if (completion.finishReason === 'length' && initialMaxTokens < 4096) {
+      const retried = await callAiChatCompletion({
+        provider: eff.provider,
+        endpoint: eff.endpoint,
+        apiKey: eff.apiKey,
+        model: eff.model,
+        messages,
+        temperature: Number(eff.configRow.temperature ?? 0.4),
+        maxTokens: 4096,
+      });
+      totalLatencyMs += retried.latencyMs;
+      completion = retried;
+      if (!completion.ok) {
+        await recordAiUsage({
+          featureKey: 'portfolio_autofill',
+          provider: eff.provider,
+          model: eff.model,
+          status: 'error',
+          latencyMs: totalLatencyMs,
+          errorMessage: completion.error,
+          actorId: auth.employee.id,
+          source: 'erp-portfolio',
+        });
+        return c.json({ error: completion.error }, 502);
+      }
+      try {
+        draft = parsePortfolioAutofillJson(completion.content);
+      } catch (retryErr) {
+        lastParseErr =
+          retryErr instanceof Error ? retryErr.message : 'Gagal membaca output JSON dari AI.';
+      }
+    }
+  }
+
+  if (draft) {
     await recordAiUsage({
       featureKey: 'portfolio_autofill',
       provider: eff.provider,
       model: eff.model,
       status: 'ok',
-      latencyMs: completion.latencyMs,
+      latencyMs: totalLatencyMs,
       promptTokens: completion.usage.prompt_tokens,
       completionTokens: completion.usage.completion_tokens,
       totalTokens: completion.usage.total_tokens,
@@ -593,27 +658,31 @@ adminRouter.post('/portfolio-autofill', async (c) => {
       meta: {
         provider: eff.provider,
         model: eff.model,
-        latency_ms: completion.latencyMs,
+        latency_ms: totalLatencyMs,
         total_tokens: completion.usage.total_tokens,
       },
     });
-  } catch (err) {
-    const parseErr = err instanceof Error ? err.message : 'Gagal membaca output JSON dari AI.';
-    await recordAiUsage({
-      featureKey: 'portfolio_autofill',
-      provider: eff.provider,
-      model: eff.model,
-      status: 'error',
-      latencyMs: completion.latencyMs,
-      promptTokens: completion.usage.prompt_tokens,
-      completionTokens: completion.usage.completion_tokens,
-      totalTokens: completion.usage.total_tokens,
-      errorMessage: parseErr,
-      actorId: auth.employee.id,
-      source: 'erp-portfolio',
-    });
-    return c.json({ error: parseErr }, 502);
   }
+
+  const finalError =
+    completion.finishReason === 'length'
+      ? 'Output JSON AI terpotong karena batas Max Tokens habis. Naikkan Max Tokens Auto-Fill di AI Management.'
+      : lastParseErr || 'Model AI tidak mengembalikan JSON portofolio yang valid.';
+
+  await recordAiUsage({
+    featureKey: 'portfolio_autofill',
+    provider: eff.provider,
+    model: eff.model,
+    status: 'error',
+    latencyMs: totalLatencyMs,
+    promptTokens: completion.usage.prompt_tokens,
+    completionTokens: completion.usage.completion_tokens,
+    totalTokens: completion.usage.total_tokens,
+    errorMessage: finalError,
+    actorId: auth.employee.id,
+    source: 'erp-portfolio',
+  });
+  return c.json({ error: finalError }, 502);
 });
 
 const publicRouter = new Hono<AppEnv>();

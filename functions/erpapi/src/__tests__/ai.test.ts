@@ -98,6 +98,24 @@ describe('AI endpoint SSRF validator & autofill JSON parser', () => {
     assert.equal(draft.highlights[0]?.includes('\u2014'), false);
 
     assert.throws(() => parsePortfolioAutofillJson('bukan json'), /JSON/);
+    assert.throws(() => parsePortfolioAutofillJson('{"title":"terpotong"'), /JSON/);
+
+    const withThinkAndTrailingComma = parsePortfolioAutofillJson(
+      [
+        '<think>Cek format {contoh} sebelum menjawab.</think>',
+        '```json',
+        '{',
+        '  "title": "Sistem Kasir Web",',
+        '  "slug": "sistem-kasir-web",',
+        '  "category": "website",',
+        '  "tech_stack": ["React", "Postgres",],',
+        '  "highlights": ["Cepat", "Rapi",],',
+        '}',
+        '```',
+      ].join('\n'),
+    );
+    assert.equal(withThinkAndTrailingComma.title, 'Sistem Kasir Web');
+    assert.deepEqual(withThinkAndTrailingComma.tech_stack, ['React', 'Postgres']);
   });
 
   it('builds structured autofill prompt with brief and categories', () => {
@@ -213,6 +231,30 @@ describe('AI Management contracts validation', () => {
     assert.equal(res.ok, false);
     if (!res.ok) {
       assert.match(res.error, /Max Tokens/);
+    }
+
+    const okFetch: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ finish_reason: 'stop', message: { content: 'Siap membantu!' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+
+    const okRes = await callAiChatCompletion({
+      provider: 'custom',
+      endpoint: 'https://router.ekalliptus.com/v1/chat/completions',
+      apiKey: 'sk-test-123',
+      model: 'glm/glm-5.3-flash',
+      messages: [{ role: 'user', content: 'Halo' }],
+      temperature: 0.7,
+      maxTokens: 512,
+      fetchImpl: okFetch,
+    });
+    assert.equal(okRes.ok, true);
+    if (okRes.ok) {
+      assert.equal(okRes.finishReason, 'stop');
     }
   });
 });

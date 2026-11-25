@@ -30,6 +30,7 @@ export type AiCompletionResult =
       content: string;
       latencyMs: number;
       usage: AiUsageMetrics;
+      finishReason: string | null;
     }
   | {
       ok: false;
@@ -220,7 +221,7 @@ export async function callAiChatCompletion(params: {
   }
 
   const controller = new AbortController();
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = params.timeoutMs ?? 45_000;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
   const fetchFn = params.fetchImpl ?? fetch;
@@ -270,6 +271,7 @@ export async function callAiChatCompletion(params: {
       content: inspected.content,
       latencyMs,
       usage: extractUsage(payload),
+      finishReason: inspected.finishReason,
     };
   } catch (err) {
     const latencyMs = Date.now() - startedAt;
@@ -315,6 +317,7 @@ export function buildPortfolioAutofillMessages(
     '3. Hindari klaim palsu atau buzzword kosong seperti revolusioner, next-generation, seamless.',
     '4. Key JSON wajib:',
     '{"title": string, "slug": string (kebab-case), "tagline": string (max 140 char), "summary": string (2-4 kalimat jelas), "category": "website"|"mobile_app"|"web_mobile"|"erp_system"|"ui_ux"|"automation"|"other", "offer_type": "ready_to_buy"|"custom_similar"|"hybrid", "availability_status": "available"|"custom_only"|"sold", "price_type": "fixed"|"starting_from"|"negotiable", "price_amount": string_digits_or_null, "delivery_estimate": string (contoh "3-5 hari kerja"), "client_name": string (industri/sektor, contoh "Retail & Gudang"), "tech_stack": string[] (max 8 item), "highlights": string[] (4-7 fitur nyata/deliverables), "whatsapp_prefill": string (1 kalimat pembuka WA sopan, max 180 char)}',
+    '5. Langsung tulis JSON singkat dan padat tanpa narasi tambahan.',
   ];
   if (extraInstructions && extraInstructions.trim().length > 0) {
     sysParts.push(`Instruksi tambahan admin: ${extraInstructions.trim()}`);
@@ -350,23 +353,86 @@ function pickEnum<T extends string>(
   return fallback;
 }
 
+function extractBalancedJsonObjects(text: string): string[] {
+  const candidates: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === '}' && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start !== -1) {
+        candidates.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return candidates;
+}
+
+function tryParseJsonObject(raw: string): Record<string, unknown> | null {
+  try {
+    const obj = JSON.parse(raw) as unknown;
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      return obj as Record<string, unknown>;
+    }
+  } catch {
+    // Fallback for trailing commas inside JSON objects/arrays
+    try {
+      const cleaned = raw.replace(/,\s*([}\]])/g, '$1');
+      const obj = JSON.parse(cleaned) as unknown;
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        return obj as Record<string, unknown>;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 export function parsePortfolioAutofillJson(rawContent: string): PortfolioAutofillDraft {
-  const withoutFence = rawContent
-    .trim()
+  const withoutThink = rawContent
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think>[\s\S]*$/gi, '')
+    .trim();
+
+  const withoutFence = withoutThink
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/i, '')
     .trim();
 
-  const firstBrace = withoutFence.indexOf('{');
-  const lastBrace = withoutFence.lastIndexOf('}');
-  if (firstBrace === -1 || lastBrace <= firstBrace) {
-    throw new Error('Model AI tidak mengembalikan JSON portofolio yang valid.');
+  const candidates = extractBalancedJsonObjects(withoutFence);
+  let parsed: Record<string, unknown> | null = null;
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    parsed = tryParseJsonObject(candidates[i]);
+    if (parsed) break;
   }
 
-  const parsed = JSON.parse(withoutFence.slice(firstBrace, lastBrace + 1)) as Record<
-    string,
-    unknown
-  >;
+  if (!parsed) {
+    throw new Error('Model AI tidak mengembalikan JSON portofolio yang valid.');
+  }
 
   const rawTitle = typeof parsed.title === 'string' ? cleanNoEmDash(parsed.title) : '';
   const title = rawTitle.slice(0, 140) || 'Project Digital Ekalliptus';
