@@ -469,21 +469,45 @@ export function AiManagementPage({ me }: { me: MeResponse }) {
             ) : null}
 
             {!isConsultTab ? (
-              <label className="flex min-h-[44px] cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-surface-subtle/60 px-3.5 py-2.5 text-xs font-medium text-text-primary">
-                <input
-                  type="checkbox"
-                  checked={currentForm.useSharedKey}
-                  disabled={!canUpdate}
-                  onChange={(e) => patchCurrent({ useSharedKey: e.target.checked })}
-                  className="h-4 w-4 cursor-pointer accent-accent disabled:cursor-not-allowed"
-                />
-                <span>
-                  Gunakan Provider, Endpoint &amp; API Key yang sama dengan AI Konsultasi
-                  {consultSaved?.has_api_key
-                    ? ` (${presets[consultSaved.provider]?.label ?? consultSaved.provider}: ${consultSaved.api_key_masked})`
-                    : ' (API key Konsultasi belum diisi)'}
-                </span>
-              </label>
+              <div className="space-y-2.5">
+                <label className="flex min-h-[44px] cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-surface-subtle/60 px-3.5 py-2.5 text-xs font-medium text-text-primary">
+                  <input
+                    type="checkbox"
+                    checked={currentForm.useSharedKey}
+                    disabled={!canUpdate}
+                    onChange={(e) => patchCurrent({ useSharedKey: e.target.checked })}
+                    className="h-4 w-4 cursor-pointer accent-accent disabled:cursor-not-allowed"
+                  />
+                  <span>
+                    Gunakan Provider, Endpoint &amp; API Key yang sama dengan AI Konsultasi
+                    {consultSaved?.has_api_key
+                      ? ` (${presets[consultSaved.provider]?.label ?? consultSaved.provider}: ${consultSaved.api_key_masked})`
+                      : ' (API key Konsultasi belum diisi)'}
+                  </span>
+                </label>
+
+                {inheritsConsultKey && consultSaved ? (
+                  <div className="rounded-lg border border-border bg-canvas px-3.5 py-2.5 text-[11px] text-text-secondary">
+                    <p>
+                      Provider aktif:{' '}
+                      <span className="font-semibold text-text-primary">
+                        {presets[consultSaved.provider]?.label ?? consultSaved.provider}
+                      </span>
+                      {consultSaved.custom_endpoint ? (
+                        <>
+                          {' '}
+                          | Endpoint:{' '}
+                          <span className="font-mono text-text-primary">
+                            {consultSaved.custom_endpoint}
+                          </span>
+                        </>
+                      ) : null}{' '}
+                      | Model Konsultasi:{' '}
+                      <span className="font-mono text-text-primary">{consultSaved.model}</span>
+                    </p>
+                  </div>
+                ) : null}
+              </div>
             ) : null}
 
             {!inheritsConsultKey ? (
@@ -635,6 +659,27 @@ export function AiManagementPage({ me }: { me: MeResponse }) {
                     }
                     className="h-11 w-full rounded-md border border-border bg-canvas px-3 font-mono text-xs text-text-primary focus:border-accent focus:outline-none"
                   />
+                  {inheritsConsultKey &&
+                  consultForm?.model.includes('/') &&
+                  currentForm.model.trim().length > 0 &&
+                  !currentForm.model.includes('/') ? (
+                    <div className="space-y-1 text-[11px] text-[#B45309] dark:text-[#FBBF24]">
+                      <p>
+                        Router konsultasi memakai prefix provider (contoh:{' '}
+                        <span className="font-mono">{consultForm.model}</span>). Tanpa prefix,
+                        router dapat menolak model atau gunakan tombol di bawah.
+                      </p>
+                      {canUpdate ? (
+                        <button
+                          type="button"
+                          onClick={() => patchCurrent({ model: consultForm.model })}
+                          className="cursor-pointer font-semibold underline hover:text-accent"
+                        >
+                          Pakai Model Konsultasi ({consultForm.model})
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="space-y-1.5">

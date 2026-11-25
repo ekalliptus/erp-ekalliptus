@@ -4,9 +4,11 @@ import {
   portfolioAutofillRequestSchema,
   updateAiFeatureConfigSchema,
 } from '@ekalliptus/contracts';
+import { resolveSharedModelId } from '../modules/ai.js';
 import { decryptApiKey, encryptApiKey, maskApiKey } from '../services/ai-crypto.js';
 import {
   buildPortfolioAutofillMessages,
+  callAiChatCompletion,
   isSafeAiEndpointUrl,
   parsePortfolioAutofillJson,
   resolveEndpointUrl,
@@ -138,5 +140,79 @@ describe('AI Management contracts validation', () => {
 
     const shortBrief = portfolioAutofillRequestSchema.safeParse({ brief: 'hi', title: '' });
     assert.equal(shortBrief.success, false);
+  });
+
+  it('inherits router prefix for shared portfolio_autofill model and surfaces clear Max Tokens reasoning error', async () => {
+    assert.equal(
+      resolveSharedModelId({
+        shareFromConsult: true,
+        targetProvider: 'zai',
+        effectiveProvider: 'custom',
+        rawTargetModel: 'glm-5.3-flash',
+        consultModel: 'glm/glm-5.3-flash',
+      }),
+      'glm/glm-5.3-flash',
+    );
+    assert.equal(
+      resolveSharedModelId({
+        shareFromConsult: true,
+        targetProvider: 'custom',
+        effectiveProvider: 'custom',
+        rawTargetModel: '',
+        consultModel: 'glm/glm-5.3-flash',
+      }),
+      'glm/glm-5.3-flash',
+    );
+    assert.equal(
+      resolveSharedModelId({
+        shareFromConsult: true,
+        targetProvider: 'custom',
+        effectiveProvider: 'custom',
+        rawTargetModel: 'deepseek/deepseek-v3',
+        consultModel: 'glm/glm-5.3-flash',
+      }),
+      'deepseek/deepseek-v3',
+    );
+    assert.equal(
+      resolveSharedModelId({
+        shareFromConsult: true,
+        targetProvider: 'zai',
+        effectiveProvider: 'custom',
+        rawTargetModel: 'glm-4.5-air',
+        consultModel: 'glm/glm-5.3-flash',
+      }),
+      'glm/glm-5.3-flash',
+    );
+
+    const mockFetch: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: 'length',
+              message: {
+                content: '',
+                reasoning_content: 'Menyusun jawaban tapi kehabisan token...',
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+
+    const res = await callAiChatCompletion({
+      provider: 'custom',
+      endpoint: 'https://router.ekalliptus.com/v1/chat/completions',
+      apiKey: 'sk-test-123',
+      model: 'glm/glm-5.3-flash',
+      messages: [{ role: 'user', content: 'Halo' }],
+      temperature: 0.7,
+      maxTokens: 64,
+      fetchImpl: mockFetch,
+    });
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.match(res.error, /Max Tokens/);
+    }
   });
 });

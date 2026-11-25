@@ -122,6 +122,44 @@ function serializeSafeConfig(row: AiConfigRow) {
   };
 }
 
+export function resolveSharedModelId(params: {
+  shareFromConsult: boolean;
+  targetProvider: AiProvider;
+  effectiveProvider: AiProvider;
+  rawTargetModel: string;
+  consultModel: string;
+}): string {
+  const targetModel = params.rawTargetModel.trim();
+  const consultModel = params.consultModel.trim();
+
+  if (params.shareFromConsult && consultModel.length > 0) {
+    if (!targetModel) {
+      return consultModel;
+    }
+    const consultSlashIdx = consultModel.indexOf('/');
+    if (consultSlashIdx > 0 && !targetModel.includes('/')) {
+      if (consultModel.endsWith(`/${targetModel}`)) {
+        return consultModel;
+      }
+      if (params.targetProvider !== params.effectiveProvider) {
+        return consultModel;
+      }
+      const prefix = consultModel.slice(0, consultSlashIdx);
+      return `${prefix}/${targetModel}`;
+    }
+    if (params.targetProvider !== params.effectiveProvider && targetModel === 'glm-4.5-air') {
+      return consultModel;
+    }
+  }
+
+  return (
+    targetModel ||
+    consultModel ||
+    AI_PROVIDER_PRESETS[params.effectiveProvider]?.defaultModel ||
+    'glm-4.5-air'
+  );
+}
+
 function resolveEffectiveExecutionConfig(
   rowsByKey: Map<string, AiConfigRow>,
   featureKey: AiFeatureKey,
@@ -147,18 +185,13 @@ function resolveEffectiveExecutionConfig(
   const endpoint = resolveEndpointUrl(provider, endpointRaw);
   const encryptedKey = effectiveSource.api_key_encrypted;
   const apiKey = decryptApiKey(encryptedKey);
-  const rawTargetModel = target.model.trim();
-  const consultModel = shareFromConsult && consultRow ? consultRow.model.trim() : '';
-  const shouldInheritConsultModel =
-    shareFromConsult &&
-    consultModel.length > 0 &&
-    (rawTargetModel.length === 0 ||
-      (target.provider !== effectiveSource.provider && rawTargetModel === 'glm-4.5-air'));
-  const model =
-    (shouldInheritConsultModel ? consultModel : rawTargetModel) ||
-    consultModel ||
-    AI_PROVIDER_PRESETS[provider]?.defaultModel ||
-    'glm-4.5-air';
+  const model = resolveSharedModelId({
+    shareFromConsult,
+    targetProvider: target.provider as AiProvider,
+    effectiveProvider: provider,
+    rawTargetModel: target.model,
+    consultModel: shareFromConsult && consultRow ? consultRow.model : '',
+  });
 
   return {
     configRow: target,
@@ -245,6 +278,18 @@ adminRouter.put('/config', requirePermission('ai', 'update'), async (c) => {
     return c.json({ error: 'Endpoint AI harus berupa domain HTTPS publik yang valid.' }, 400);
   }
 
+  const consultRow = rows.find((r) => r.feature_key === 'consult');
+  const useSharedKey =
+    data.feature_key === 'portfolio_autofill' ? Boolean(data.use_shared_key) : false;
+  const effectiveProvider: AiProvider =
+    useSharedKey && consultRow ? (consultRow.provider as AiProvider) : data.provider;
+  const effectiveCustomEndpoint =
+    useSharedKey && consultRow
+      ? consultRow.custom_endpoint
+      : data.provider === 'custom'
+        ? endpointTrimmed
+        : null;
+
   let nextEncrypted = existing.api_key_encrypted;
   let nextMasked = existing.api_key_masked;
   let apiKeyChanged = false;
@@ -264,13 +309,12 @@ adminRouter.put('/config', requirePermission('ai', 'update'), async (c) => {
     .update(ai_feature_configs)
     .set({
       is_enabled: data.is_enabled,
-      provider: data.provider,
-      custom_endpoint: data.provider === 'custom' ? endpointTrimmed : null,
+      provider: effectiveProvider,
+      custom_endpoint: effectiveProvider === 'custom' ? effectiveCustomEndpoint : null,
       model: data.model.trim(),
       api_key_encrypted: nextEncrypted,
       api_key_masked: nextMasked,
-      use_shared_key:
-        data.feature_key === 'portfolio_autofill' ? Boolean(data.use_shared_key) : false,
+      use_shared_key: useSharedKey,
       system_prompt: data.system_prompt.replace(/\u2014/g, ', ').trim(),
       temperature: data.temperature,
       max_tokens: data.max_tokens,

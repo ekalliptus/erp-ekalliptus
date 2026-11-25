@@ -106,24 +106,57 @@ export function resolveEndpointUrl(
   return preset?.endpoint || null;
 }
 
-function extractMessageContent(payload: unknown): string {
-  if (!payload || typeof payload !== 'object') return '';
+function inspectCompletionPayload(payload: unknown): {
+  content: string;
+  finishReason: string | null;
+  hasReasoning: boolean;
+} {
+  if (!payload || typeof payload !== 'object') {
+    return { content: '', finishReason: null, hasReasoning: false };
+  }
   const data = payload as {
+    output_text?: string;
     choices?: Array<{
+      finish_reason?: string | null;
+      text?: string;
       message?: {
         content?: string | Array<{ type?: string; text?: string }>;
+        reasoning_content?: string;
+        reasoning?: string;
       };
     }>;
   };
-  const rawContent = data.choices?.[0]?.message?.content;
-  if (typeof rawContent === 'string') return rawContent.trim();
+  const firstChoice = data.choices?.[0];
+  const finishReason =
+    typeof firstChoice?.finish_reason === 'string' ? firstChoice.finish_reason : null;
+  const reasoningRaw =
+    typeof firstChoice?.message?.reasoning_content === 'string'
+      ? firstChoice.message.reasoning_content
+      : typeof firstChoice?.message?.reasoning === 'string'
+        ? firstChoice.message.reasoning
+        : '';
+  const hasReasoning = reasoningRaw.trim().length > 0;
+
+  const rawContent = firstChoice?.message?.content;
+  if (typeof rawContent === 'string' && rawContent.trim().length > 0) {
+    return { content: rawContent.trim(), finishReason, hasReasoning };
+  }
   if (Array.isArray(rawContent)) {
-    return rawContent
+    const joined = rawContent
       .map((part) => (part && typeof part.text === 'string' ? part.text : ''))
       .join('')
       .trim();
+    if (joined.length > 0) {
+      return { content: joined, finishReason, hasReasoning };
+    }
   }
-  return '';
+  if (typeof firstChoice?.text === 'string' && firstChoice.text.trim().length > 0) {
+    return { content: firstChoice.text.trim(), finishReason, hasReasoning };
+  }
+  if (typeof data.output_text === 'string' && data.output_text.trim().length > 0) {
+    return { content: data.output_text.trim(), finishReason, hasReasoning };
+  }
+  return { content: '', finishReason, hasReasoning };
 }
 
 function extractUsage(payload: unknown): AiUsageMetrics {
@@ -219,11 +252,14 @@ export async function callAiChatCompletion(params: {
     }
 
     const payload = await response.json().catch(() => null);
-    const content = extractMessageContent(payload);
-    if (!content) {
+    const inspected = inspectCompletionPayload(payload);
+    if (!inspected.content) {
+      const tokenLimitHit = inspected.finishReason === 'length' || inspected.hasReasoning;
       return {
         ok: false,
-        error: 'Respons model AI kosong atau format tidak dikenali.',
+        error: tokenLimitHit
+          ? 'Respons model AI kosong karena batas Max Tokens terlalu kecil untuk proses reasoning. Naikkan Max Tokens di AI Management (disarankan >= 512 untuk Konsultasi, >= 1200 untuk Auto-Fill).'
+          : 'Respons model AI kosong atau format tidak dikenali.',
         statusCode: 502,
         latencyMs,
       };
@@ -231,7 +267,7 @@ export async function callAiChatCompletion(params: {
 
     return {
       ok: true,
-      content,
+      content: inspected.content,
       latencyMs,
       usage: extractUsage(payload),
     };
