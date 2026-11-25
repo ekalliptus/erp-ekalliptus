@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createPortfolioProjectSchema } from '@ekalliptus/contracts';
+import {
+  capturePortfolioDemoSchema,
+  createPortfolioProjectSchema,
+} from '@ekalliptus/contracts';
+import {
+  captureDemoVariant,
+  detectSafeRasterMime,
+  isPrivateOrReservedIp,
+  validatePublicCaptureUrl,
+} from '../services/demo-capture.js';
 import {
   authorizeStorageDownload,
   isAllowedPortfolioImageMime,
@@ -132,5 +141,146 @@ describe('createPortfolioProjectSchema validation', () => {
       price_amount: null,
     });
     assert.equal(webMobile.success, true);
+  });
+});
+
+function makeFakeImage(header: number[], length = 4200): Uint8Array {
+  const bytes = new Uint8Array(length);
+  header.forEach((b, i) => {
+    bytes[i] = b;
+  });
+  return bytes;
+}
+
+describe('Demo URL capture SSRF guard, MIME checks & provider fallback', () => {
+  it('detects private, loopback, link-local, CGNAT, and mapped IPv6 addresses', () => {
+    assert.equal(isPrivateOrReservedIp('127.0.0.1'), true);
+    assert.equal(isPrivateOrReservedIp('10.20.30.40'), true);
+    assert.equal(isPrivateOrReservedIp('172.16.5.1'), true);
+    assert.equal(isPrivateOrReservedIp('192.168.1.10'), true);
+    assert.equal(isPrivateOrReservedIp('169.254.169.254'), true);
+    assert.equal(isPrivateOrReservedIp('100.64.0.1'), true);
+    assert.equal(isPrivateOrReservedIp('0.0.0.0'), true);
+    assert.equal(isPrivateOrReservedIp('::1'), true);
+    assert.equal(isPrivateOrReservedIp('fe80::1'), true);
+    assert.equal(isPrivateOrReservedIp('fc00::1'), true);
+    assert.equal(isPrivateOrReservedIp('::ffff:127.0.0.1'), true);
+    assert.equal(isPrivateOrReservedIp('104.21.45.12'), false);
+    assert.equal(isPrivateOrReservedIp('2606:4700:4700::1111'), false);
+  });
+
+  it('validates public HTTPS capture URLs and rejects SSRF targets', async () => {
+    const publicDns = async () => [{ address: '104.21.45.12', family: 4 }];
+    const privateDns = async () => [{ address: '127.0.0.1', family: 4 }];
+
+    assert.equal((await validatePublicCaptureUrl('http://ekalliptus.com', publicDns)).ok, false);
+    assert.equal((await validatePublicCaptureUrl('https://localhost:3000', publicDns)).ok, false);
+    assert.equal((await validatePublicCaptureUrl('https://127.0.0.1/app', publicDns)).ok, false);
+    assert.equal((await validatePublicCaptureUrl('https://user:pass@ekalliptus.com', publicDns)).ok, false);
+    assert.equal((await validatePublicCaptureUrl('https://ekalliptus.com:8443', publicDns)).ok, false);
+    assert.equal((await validatePublicCaptureUrl('https://internal.ekalliptus.com', privateDns)).ok, false);
+
+    const okRes = await validatePublicCaptureUrl('https://ekalliptus.com/demo', publicDns);
+    assert.equal(okRes.ok, true);
+    if (okRes.ok) {
+      assert.equal(okRes.hostname, 'ekalliptus.com');
+    }
+  });
+
+  it('accepts only PNG/JPEG/WEBP images >= 4096 bytes and rejects SVG/HTML/tiny buffers', () => {
+    const png = makeFakeImage([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const jpg = makeFakeImage([0xff, 0xd8, 0xff, 0xe0]);
+    const webp = makeFakeImage([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]);
+    const tinyPng = makeFakeImage([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 128);
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"></svg>'.repeat(120));
+
+    assert.equal(detectSafeRasterMime(png), 'image/png');
+    assert.equal(detectSafeRasterMime(jpg), 'image/jpeg');
+    assert.equal(detectSafeRasterMime(webp), 'image/webp');
+    assert.equal(detectSafeRasterMime(tinyPng), null);
+    assert.equal(detectSafeRasterMime(svg), null);
+  });
+
+  it('validates capturePortfolioDemoSchema payloads', () => {
+    assert.equal(
+      capturePortfolioDemoSchema.safeParse({
+        demo_url: 'https://ekalliptus.com',
+        variants: ['desktop', 'mobile'],
+      }).success,
+      true,
+    );
+    assert.equal(
+      capturePortfolioDemoSchema.safeParse({
+        demo_url: 'http://ekalliptus.com',
+      }).success,
+      false,
+    );
+  });
+
+  it('polls mShots 307 then succeeds on 200 JPEG', async () => {
+    let calls = 0;
+    const jpgBytes = makeFakeImage([0xff, 0xd8, 0xff, 0xe0], 5000);
+    const res = await captureDemoVariant({
+      url: 'https://ekalliptus.com',
+      variant: 'desktop',
+      sleepImpl: async () => {},
+      env: {},
+      fetchImpl: (async () => {
+        calls += 1;
+        if (calls < 3) {
+          return new Response('', { status: 307 });
+        }
+        return new Response(Buffer.from(jpgBytes), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        });
+      }) as typeof fetch,
+    });
+    assert.equal(res.ok, true);
+    if (res.ok) {
+      assert.equal(res.provider, 'mshots');
+      assert.equal(res.mime, 'image/jpeg');
+    }
+    assert.equal(calls, 3);
+  });
+
+  it('falls back to Microlink when mShots fails, and fails gracefully when all providers fail', async () => {
+    const pngBytes = makeFakeImage([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 6000);
+    const microlinkOk = await captureDemoVariant({
+      url: 'https://demo.ekalliptus.com',
+      variant: 'mobile',
+      sleepImpl: async () => {},
+      env: {},
+      fetchImpl: (async (input: string | URL | Request) => {
+        const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+        if (urlStr.startsWith('https://s0.wp.com/')) {
+          return new Response('err', { status: 502 });
+        }
+        if (urlStr.startsWith('https://api.microlink.io/')) {
+          return new Response(
+            JSON.stringify({
+              status: 'success',
+              data: { screenshot: { url: 'https://iad.microlink.io/shot.png' } },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(Buffer.from(pngBytes), { status: 200, headers: { 'content-type': 'image/png' } });
+      }) as typeof fetch,
+    });
+    assert.equal(microlinkOk.ok, true);
+    if (microlinkOk.ok) {
+      assert.equal(microlinkOk.provider, 'microlink');
+      assert.equal(microlinkOk.mime, 'image/png');
+    }
+
+    const allFailed = await captureDemoVariant({
+      url: 'https://demo.ekalliptus.com',
+      variant: 'desktop',
+      sleepImpl: async () => {},
+      env: {},
+      fetchImpl: (async () => new Response('down', { status: 503 })) as typeof fetch,
+    });
+    assert.equal(allFailed.ok, false);
   });
 });

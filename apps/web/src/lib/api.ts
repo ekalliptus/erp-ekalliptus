@@ -821,6 +821,31 @@ export interface CreatePortfolioPayload {
 
 export type UpdatePortfolioPayload = Partial<CreatePortfolioPayload>;
 
+export interface CapturePortfolioDemoResponse {
+  demo_url: string;
+  hostname: string;
+  desktop:
+    | {
+        ok: true;
+        object_key: string;
+        preview_url: string;
+        provider: string;
+        bytes: number;
+      }
+    | { ok: false; reason: string }
+    | null;
+  mobile:
+    | {
+        ok: true;
+        data_url: string;
+        mime: string;
+        provider: string;
+        bytes: number;
+      }
+    | { ok: false; reason: string }
+    | null;
+}
+
 export interface AiProviderPresetView {
   label: string;
   endpoint: string;
@@ -1526,6 +1551,11 @@ export const erpApi = {
     remove: (id: string) =>
       apiFetch<{ ok: boolean; id: string }>(`/api/portfolio/${id}`, {
         method: 'DELETE',
+      }),
+    captureDemo: (body: { demo_url: string; variants?: Array<'desktop' | 'mobile'> }) =>
+      apiFetch<CapturePortfolioDemoResponse>('/api/portfolio/capture-demo', {
+        method: 'POST',
+        body: JSON.stringify(body),
       }),
   },
 

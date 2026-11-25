@@ -541,6 +541,17 @@ export const updatePortfolioProjectSchema = z
     { message: 'Harga project wajib lebih dari 0 untuk tipe harga ini.' },
   );
 
+export const capturePortfolioDemoSchema = z.object({
+  demo_url: httpsUrlSchema,
+  variants: z
+    .array(z.enum(['desktop', 'mobile']))
+    .min(1)
+    .max(2)
+    .optional()
+    .default(['desktop', 'mobile']),
+});
+
+export type CapturePortfolioDemoVariant = 'desktop' | 'mobile';
 export type PortfolioCategory = (typeof PORTFOLIO_CATEGORIES)[number];
 export type PortfolioOfferType = (typeof PORTFOLIO_OFFER_TYPES)[number];
 export type PortfolioAvailabilityStatus = (typeof PORTFOLIO_AVAILABILITY_STATUSES)[number];

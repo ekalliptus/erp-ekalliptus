@@ -1,5 +1,8 @@
+import crypto from 'node:crypto';
 import {
+  capturePortfolioDemoSchema,
   createPortfolioProjectSchema,
+  hasPermission,
   portfolioCategorySchema,
   updatePortfolioProjectSchema,
 } from '@ekalliptus/contracts';
@@ -9,13 +12,14 @@ import { Hono, type Context } from 'hono';
 import { getDb, jsonSafe } from '../db.js';
 import { writeAuditLog } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/rbac.js';
+import { captureDemoScreenshots } from '../services/demo-capture.js';
 import { checkRateLimit, clientIp } from '../services/rate-limit.js';
 import {
   isSafeHttpsUrl,
   isSafePortfolioObjectKey,
   slugifyPortfolioTitle,
 } from '../services/security-policy.js';
-import { createPresignedDownloadUrl } from '../services/storage.js';
+import { createPresignedDownloadUrl, uploadObject } from '../services/storage.js';
 import type { AppEnv } from '../types.js';
 import type { ErpModulePlugin } from './plugin.js';
 
@@ -243,6 +247,115 @@ adminRouter.post('/', requirePermission('portfolio', 'create'), async (c) => {
   }
 
   return c.json({ item: await formatAdminPortfolioRow(created) }, 201);
+});
+
+adminRouter.post('/capture-demo', async (c) => {
+  const auth = c.get('auth');
+  const canCapture =
+    hasPermission(auth.permissions, 'portfolio', 'create') ||
+    hasPermission(auth.permissions, 'portfolio', 'update');
+  if (!canCapture) {
+    return c.json(
+      { error: 'Forbidden: Anda tidak memiliki izin membuat media portofolio.' },
+      403,
+    );
+  }
+
+  if (!checkRateLimit(`portfolio-capture:${auth.employee.id}`, 12, 60_000)) {
+    return c.json({ error: 'Terlalu banyak permintaan capture. Coba lagi sebentar.' }, 429);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  const parsed = capturePortfolioDemoSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.flatten() }, 400);
+  }
+
+  const captureRes = await captureDemoScreenshots(parsed.data.demo_url, parsed.data.variants);
+  if (captureRes.urlValidationError) {
+    return c.json({ error: captureRes.urlValidationError }, 400);
+  }
+
+  let desktopKey: string | null = null;
+  let desktopOut:
+    | { ok: true; object_key: string; preview_url: string; provider: string; bytes: number }
+    | { ok: false; reason: string }
+    | null = null;
+
+  if (captureRes.desktop) {
+    if (captureRes.desktop.ok) {
+      const ext =
+        captureRes.desktop.mime === 'image/png'
+          ? 'png'
+          : captureRes.desktop.mime === 'image/webp'
+            ? 'webp'
+            : 'jpg';
+      desktopKey = `portfolio/${auth.employee.id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-demo-desktop.${ext}`;
+      await uploadObject({
+        key: desktopKey,
+        body: captureRes.desktop.bytes,
+        contentType: captureRes.desktop.mime,
+      });
+      const previewUrl = await createPresignedDownloadUrl({
+        key: desktopKey,
+        expiresIn: 3600,
+      });
+      desktopOut = {
+        ok: true,
+        object_key: desktopKey,
+        preview_url: previewUrl,
+        provider: captureRes.desktop.provider,
+        bytes: captureRes.desktop.bytes.byteLength,
+      };
+    } else {
+      desktopOut = { ok: false, reason: captureRes.desktop.reason };
+    }
+  }
+
+  let mobileOut:
+    | { ok: true; data_url: string; mime: string; provider: string; bytes: number }
+    | { ok: false; reason: string }
+    | null = null;
+
+  if (captureRes.mobile) {
+    if (captureRes.mobile.ok) {
+      const b64 = Buffer.from(captureRes.mobile.bytes).toString('base64');
+      mobileOut = {
+        ok: true,
+        data_url: `data:${captureRes.mobile.mime};base64,${b64}`,
+        mime: captureRes.mobile.mime,
+        provider: captureRes.mobile.provider,
+        bytes: captureRes.mobile.bytes.byteLength,
+      };
+    } else {
+      mobileOut = { ok: false, reason: captureRes.mobile.reason };
+    }
+  }
+
+  await writeAuditLog(getDb(), {
+    actorId: auth.employee.id,
+    platform: auth.platform,
+    module: 'portfolio',
+    action: 'capture_portfolio_demo',
+    entityId: desktopKey ?? captureRes.url,
+    afterData: {
+      demo_url: captureRes.url,
+      hostname: captureRes.hostname,
+      desktop_ok: Boolean(desktopOut?.ok),
+      desktop_provider: desktopOut && desktopOut.ok ? desktopOut.provider : null,
+      desktop_reason: desktopOut && !desktopOut.ok ? desktopOut.reason : null,
+      mobile_ok: Boolean(mobileOut?.ok),
+      mobile_provider: mobileOut && mobileOut.ok ? mobileOut.provider : null,
+      mobile_reason: mobileOut && !mobileOut.ok ? mobileOut.reason : null,
+    },
+  });
+
+  return c.json({
+    demo_url: captureRes.url,
+    hostname: captureRes.hostname,
+    desktop: desktopOut,
+    mobile: mobileOut,
+  });
 });
 
 adminRouter.patch('/:id', requirePermission('portfolio', 'update'), async (c) => {

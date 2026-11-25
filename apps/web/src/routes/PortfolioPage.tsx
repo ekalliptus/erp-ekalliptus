@@ -18,6 +18,7 @@ import {
   Eye,
   EyeOff,
   ImagePlus,
+  MonitorSmartphone,
   Pencil,
   Plus,
   RotateCcw,
@@ -27,7 +28,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import { useEffect, useId, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { ModulePageSkeleton } from '../components/Skeleton.tsx';
 import { SlideOver } from '../components/SlideOver.tsx';
 import { EmptyState, ErrorState } from '../components/StateViews.tsx';
@@ -35,11 +36,21 @@ import { StatusBadge, type BadgeTone } from '../components/StatusBadge.tsx';
 import {
   erpApi,
   uploadFileViaPresign,
+  type CapturePortfolioDemoResponse,
   type CreatePortfolioPayload,
   type MeResponse,
   type PortfolioProjectRow,
 } from '../lib/api.ts';
 import { formatDateTimeId, formatRupiah } from '../lib/format.ts';
+import {
+  renderLiveMobileShowcaseSlide,
+  renderStudioCoverSlide,
+  renderStudioHighlightsSlide,
+  renderStudioOverviewSlide,
+  renderStudioStackSpecSlide,
+  type PortfolioStudioInput,
+  type StudioTheme,
+} from '../lib/portfolioStudioMedia.ts';
 
 const CATEGORY_LABELS: Record<PortfolioCategory, string> = {
   website: 'Website',
@@ -142,6 +153,14 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
   const [sortOrder, setSortOrder] = useState('0');
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadingGallery, setUploadingGallery] = useState(false);
+  const [autoGenerateMediaWithAi, setAutoGenerateMediaWithAi] = useState(true);
+  const [studioTheme, setStudioTheme] = useState<StudioTheme>('dark');
+  const [generatingMedia, setGeneratingMedia] = useState(false);
+  const [mediaProgress, setMediaProgress] = useState<string | null>(null);
+  const [mediaFeedback, setMediaFeedback] = useState<{
+    kind: 'success' | 'info' | 'error';
+    text: string;
+  } | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [autofillBrief, setAutofillBrief] = useState('');
   const [autofillMode, setAutofillMode] = useState<'overwrite' | 'fill_empty'>('overwrite');
@@ -165,7 +184,27 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     techStackText: string;
     highlightsText: string;
     whatsappPrefill: string;
+    coverImageKey: string | null;
+    coverPreviewSrc: string | null;
+    coverImageUrl: string;
+    galleryKeys: string[];
+    galleryPreviewSrcs: string[];
+    galleryUrlsText: string;
   } | null>(null);
+
+  const trackedBlobUrlsRef = useRef<Set<string>>(new Set());
+
+  const trackBlobUrl = (blobUrl: string) => {
+    trackedBlobUrlsRef.current.add(blobUrl);
+    return blobUrl;
+  };
+
+  const releaseAllBlobUrls = () => {
+    for (const u of trackedBlobUrlsRef.current) {
+      URL.revokeObjectURL(u);
+    }
+    trackedBlobUrlsRef.current.clear();
+  };
 
   const portfolioQuery = useQuery({
     queryKey: ['portfolio', 'list'],
@@ -175,18 +214,16 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
 
   useEffect(() => {
     return () => {
-      if (coverPreviewSrc?.startsWith('blob:')) URL.revokeObjectURL(coverPreviewSrc);
-      for (const u of galleryPreviewSrcs) {
-        if (u.startsWith('blob:')) URL.revokeObjectURL(u);
-      }
+      releaseAllBlobUrls();
     };
-  }, [coverPreviewSrc, galleryPreviewSrcs]);
+  }, []);
 
   const invalidatePortfolio = async () => {
     await queryClient.invalidateQueries({ queryKey: ['portfolio'] });
   };
 
   const resetForm = () => {
+    releaseAllBlobUrls();
     setEditing(null);
     setSlugLockedManual(false);
     setTitle('');
@@ -214,6 +251,10 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     setIsFeatured(false);
     setIsPublished(true);
     setSortOrder('0');
+    setAutoGenerateMediaWithAi(true);
+    setGeneratingMedia(false);
+    setMediaProgress(null);
+    setMediaFeedback(null);
     setFormError(null);
     setAutofillBrief('');
     setAutofillMode('overwrite');
@@ -227,6 +268,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
   };
 
   const openEditDrawer = (row: PortfolioProjectRow) => {
+    releaseAllBlobUrls();
     setEditing(row);
     setSlugLockedManual(true);
     setAutofillBrief('');
@@ -259,6 +301,16 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     setIsFeatured(row.is_featured);
     setIsPublished(row.is_published);
     setSortOrder(String(row.sort_order ?? 0));
+    const hasExistingMedia = Boolean(
+      row.cover_image_key ||
+        row.cover_image_url ||
+        (row.gallery_image_keys?.length ?? 0) > 0 ||
+        (row.gallery_image_urls?.length ?? 0) > 0,
+    );
+    setAutoGenerateMediaWithAi(!hasExistingMedia);
+    setGeneratingMedia(false);
+    setMediaProgress(null);
+    setMediaFeedback(null);
     setFormError(null);
     setDrawerOpen(true);
   };
@@ -313,6 +365,223 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     },
   });
 
+  type HybridMediaDraft = {
+    title?: string;
+    slug?: string;
+    tagline?: string;
+    summary?: string;
+    category?: PortfolioCategory;
+    offerType?: PortfolioOfferType;
+    availabilityStatus?: PortfolioAvailabilityStatus;
+    priceType?: PortfolioPriceType;
+    priceAmount?: string;
+    deliveryEstimate?: string;
+    clientName?: string;
+    demoUrl?: string;
+    techStackText?: string;
+    highlightsText?: string;
+    coverImageKey?: string | null;
+    coverImageUrl?: string;
+    galleryKeys?: string[];
+    galleryUrlsText?: string;
+  };
+
+  async function runHybridMediaGeneration(opts: {
+    scope: 'all' | 'cover' | 'gallery';
+    fillEmptyOnly?: boolean;
+    draft?: HybridMediaDraft;
+  }) {
+    if (generatingMedia) return;
+
+    const effTitle = (opts.draft?.title ?? title).trim();
+    const effDemo = (opts.draft?.demoUrl ?? demoUrl).trim();
+    if (effTitle.length < 3 && !effDemo) {
+      setMediaFeedback({
+        kind: 'error',
+        text: 'Isi Judul Project (minimal 3 karakter) atau URL Live Demo terlebih dahulu.',
+      });
+      return;
+    }
+
+    const curCoverKey =
+      opts.draft?.coverImageKey !== undefined ? opts.draft.coverImageKey : coverImageKey;
+    const curCoverUrl =
+      opts.draft?.coverImageUrl !== undefined ? opts.draft.coverImageUrl : coverImageUrl;
+    const curGalleryKeys =
+      opts.draft?.galleryKeys !== undefined ? opts.draft.galleryKeys : galleryKeys;
+    const curGalleryUrlsText =
+      opts.draft?.galleryUrlsText !== undefined ? opts.draft.galleryUrlsText : galleryUrlsText;
+
+    const needCover =
+      (opts.scope === 'all' || opts.scope === 'cover') &&
+      (!opts.fillEmptyOnly || (!curCoverKey && !curCoverUrl.trim()));
+    const needGallery =
+      (opts.scope === 'all' || opts.scope === 'gallery') &&
+      (!opts.fillEmptyOnly || (curGalleryKeys.length === 0 && !curGalleryUrlsText.trim()));
+
+    if (!needCover && !needGallery) {
+      setMediaFeedback({
+        kind: 'info',
+        text: 'Cover dan galeri sudah terisi; mode isi kolom kosong dilewati.',
+      });
+      return;
+    }
+
+    const effSlugRaw = (opts.draft?.slug ?? slug).trim();
+    const effSlug = (effSlugRaw ? toSlugPreview(effSlugRaw) : toSlugPreview(effTitle)) || 'project-ekalliptus';
+    const effCategory = opts.draft?.category ?? category;
+    const effOffer = opts.draft?.offerType ?? offerType;
+    const effAvail = opts.draft?.availabilityStatus ?? availabilityStatus;
+    const effPriceType = opts.draft?.priceType ?? priceType;
+    const effPriceAmount = opts.draft?.priceAmount ?? priceAmount;
+
+    const studioInput: PortfolioStudioInput = {
+      title: effTitle || effSlug,
+      slug: effSlug,
+      tagline: (opts.draft?.tagline ?? tagline).trim(),
+      summary: (opts.draft?.summary ?? summary).trim(),
+      category: effCategory,
+      categoryLabel: CATEGORY_LABELS[effCategory],
+      offerType: effOffer,
+      offerLabel: OFFER_LABELS[effOffer],
+      availabilityStatus: effAvail,
+      availabilityLabel: AVAILABILITY_META[effAvail].label,
+      priceLabel: formatPortfolioPricePreview(effPriceType, effPriceAmount),
+      deliveryEstimate: (opts.draft?.deliveryEstimate ?? deliveryEstimate).trim(),
+      clientName: (opts.draft?.clientName ?? clientName).trim(),
+      demoUrl: effDemo,
+      techStack: (opts.draft?.techStackText ?? techStackText)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .slice(0, 12),
+      highlights: (opts.draft?.highlightsText ?? highlightsText)
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .slice(0, 10),
+    };
+
+    let hasValidHttpsDemo = false;
+    if (effDemo) {
+      try {
+        const parsed = new URL(effDemo);
+        hasValidHttpsDemo = parsed.protocol === 'https:' && parsed.hostname.length > 0;
+      } catch {
+        hasValidHttpsDemo = false;
+      }
+    }
+
+    setFormError(null);
+    setMediaFeedback(null);
+    setGeneratingMedia(true);
+
+    const summaryNotes: string[] = [];
+    const fallbackWarnings: string[] = [];
+
+    try {
+      let captureRes: CapturePortfolioDemoResponse | null = null;
+      if (hasValidHttpsDemo) {
+        const variants: Array<'desktop' | 'mobile'> = [];
+        if (needCover) variants.push('desktop');
+        if (needGallery) variants.push('mobile');
+        setMediaProgress('Memotret screenshot live dari URL demo...');
+        try {
+          captureRes = await erpApi.portfolio.captureDemo({
+            demo_url: effDemo,
+            variants,
+          });
+        } catch (err) {
+          fallbackWarnings.push((err as Error).message);
+        }
+      } else if (effDemo) {
+        fallbackWarnings.push('URL Live Demo harus diawali https:// agar bisa di-capture; memakai Studio Showcase.');
+      }
+
+      if (needCover) {
+        if (captureRes?.desktop?.ok) {
+          setCoverImageKey(captureRes.desktop.object_key);
+          setCoverPreviewSrc(captureRes.desktop.preview_url);
+          setCoverImageUrl('');
+          summaryNotes.push(`Cover: Screenshot Live Desktop (${captureRes.desktop.provider})`);
+        } else {
+          if (captureRes?.desktop && !captureRes.desktop.ok) {
+            fallbackWarnings.push(`Live desktop gagal (${captureRes.desktop.reason})`);
+          }
+          setMediaProgress('Merender Cover Studio Showcase...');
+          const coverFile = await renderStudioCoverSlide(studioInput, studioTheme);
+          setMediaProgress('Mengunggah Cover ke Neon Storage...');
+          const key = await uploadFileViaPresign('portfolio', coverFile);
+          setCoverImageKey(key);
+          setCoverPreviewSrc(trackBlobUrl(URL.createObjectURL(coverFile)));
+          setCoverImageUrl('');
+          summaryNotes.push('Cover: Studio Showcase');
+        }
+      }
+
+      if (needGallery) {
+        let slide1: File;
+        let usedMobileLive = false;
+        if (captureRes?.mobile?.ok) {
+          setMediaProgress('Menyusun Slide Mobile Live & Galeri Studio...');
+          try {
+            slide1 = await renderLiveMobileShowcaseSlide(
+              studioInput,
+              captureRes.mobile.data_url,
+              studioTheme,
+            );
+            usedMobileLive = true;
+          } catch {
+            slide1 = await renderStudioOverviewSlide(studioInput, studioTheme);
+          }
+        } else {
+          if (captureRes?.mobile && !captureRes.mobile.ok) {
+            fallbackWarnings.push(`Live mobile gagal (${captureRes.mobile.reason})`);
+          }
+          setMediaProgress('Merender 3 Slide Galeri Studio...');
+          slide1 = await renderStudioOverviewSlide(studioInput, studioTheme);
+        }
+
+        const slide2 = await renderStudioHighlightsSlide(studioInput, studioTheme);
+        const slide3 = await renderStudioStackSpecSlide(studioInput, studioTheme);
+        const slides = [slide1, slide2, slide3];
+
+        const uploadedKeys: string[] = [];
+        const localUrls: string[] = [];
+        for (let i = 0; i < slides.length; i += 1) {
+          setMediaProgress(`Mengunggah slide galeri (${i + 1}/${slides.length})...`);
+          const file = slides[i];
+          const key = await uploadFileViaPresign('portfolio', file);
+          uploadedKeys.push(key);
+          localUrls.push(trackBlobUrl(URL.createObjectURL(file)));
+        }
+
+        setGalleryKeys(uploadedKeys);
+        setGalleryPreviewSrcs(localUrls);
+        summaryNotes.push(
+          usedMobileLive
+            ? `Galeri: Slide Mobile Live (${captureRes?.mobile?.ok ? captureRes.mobile.provider : 'live'}) + 2 Slide Studio`
+            : 'Galeri: 3 Slide Studio Showcase',
+        );
+      }
+
+      const fallbackSuffix =
+        fallbackWarnings.length > 0 ? ` Catatan fallback: ${fallbackWarnings.join('; ')}.` : '';
+      setMediaFeedback({
+        kind: fallbackWarnings.length > 0 ? 'info' : 'success',
+        text: `Media selesai dibuat (${summaryNotes.join(' | ')}).${fallbackSuffix}`,
+      });
+    } catch (err) {
+      setMediaFeedback({
+        kind: 'error',
+        text: (err as Error).message || 'Gagal membuat media otomatis.',
+      });
+    } finally {
+      setMediaProgress(null);
+      setGeneratingMedia(false);
+    }
+  }
+
   const autofillMut = useMutation({
     mutationFn: erpApi.ai.portfolioAutofill,
     onSuccess: (res) => {
@@ -332,53 +601,83 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
         techStackText,
         highlightsText,
         whatsappPrefill,
+        coverImageKey,
+        coverPreviewSrc,
+        coverImageUrl,
+        galleryKeys: [...galleryKeys],
+        galleryPreviewSrcs: [...galleryPreviewSrcs],
+        galleryUrlsText,
       };
       setPreAutofillSnapshot(snapshot);
 
       const d = res.draft;
       const overwrite = autofillMode === 'overwrite';
 
-      if (overwrite || !title.trim()) {
-        setTitle(d.title);
-      }
-      if (!slugLockedManual && (overwrite || !slug.trim())) {
-        setSlug(d.slug);
-      }
-      if (overwrite || !tagline.trim()) {
-        setTagline(d.tagline);
-      }
-      if (overwrite || !summary.trim()) {
-        setSummary(d.summary);
-      }
-      if (overwrite) {
-        setCategory(d.category);
-        setOfferType(d.offer_type);
-        setAvailabilityStatus(d.availability_status);
-        setPriceType(d.price_type);
-      }
-      if (overwrite || !priceAmount.trim()) {
-        setPriceAmount(d.price_amount ?? '');
-      }
-      if (overwrite || !deliveryEstimate.trim()) {
-        setDeliveryEstimate(d.delivery_estimate);
-      }
-      if (overwrite || !clientName.trim()) {
-        setClientName(d.client_name);
-      }
-      if (overwrite || !techStackText.trim()) {
-        setTechStackText(d.tech_stack.join(', '));
-      }
-      if (overwrite || !highlightsText.trim()) {
-        setHighlightsText(d.highlights.join('\n'));
-      }
-      if (overwrite || !whatsappPrefill.trim()) {
-        setWhatsappPrefill(d.whatsapp_prefill);
-      }
+      const nextTitle = overwrite || !title.trim() ? d.title : title;
+      const nextSlug = !slugLockedManual && (overwrite || !slug.trim()) ? d.slug : slug;
+      const nextTagline = overwrite || !tagline.trim() ? d.tagline : tagline;
+      const nextSummary = overwrite || !summary.trim() ? d.summary : summary;
+      const nextCategory = overwrite ? d.category : category;
+      const nextOfferType = overwrite ? d.offer_type : offerType;
+      const nextAvailability = overwrite ? d.availability_status : availabilityStatus;
+      const nextPriceType = overwrite ? d.price_type : priceType;
+      const nextPriceAmount = overwrite || !priceAmount.trim() ? d.price_amount ?? '' : priceAmount;
+      const nextDeliveryEstimate =
+        overwrite || !deliveryEstimate.trim() ? d.delivery_estimate : deliveryEstimate;
+      const nextClientName = overwrite || !clientName.trim() ? d.client_name : clientName;
+      const nextTechStackText =
+        overwrite || !techStackText.trim() ? d.tech_stack.join(', ') : techStackText;
+      const nextHighlightsText =
+        overwrite || !highlightsText.trim() ? d.highlights.join('\n') : highlightsText;
+      const nextWhatsappPrefill =
+        overwrite || !whatsappPrefill.trim() ? d.whatsapp_prefill : whatsappPrefill;
+
+      setTitle(nextTitle);
+      setSlug(nextSlug);
+      setTagline(nextTagline);
+      setSummary(nextSummary);
+      setCategory(nextCategory);
+      setOfferType(nextOfferType);
+      setAvailabilityStatus(nextAvailability);
+      setPriceType(nextPriceType);
+      setPriceAmount(nextPriceAmount);
+      setDeliveryEstimate(nextDeliveryEstimate);
+      setClientName(nextClientName);
+      setTechStackText(nextTechStackText);
+      setHighlightsText(nextHighlightsText);
+      setWhatsappPrefill(nextWhatsappPrefill);
 
       setAutofillFeedback({
         kind: 'success',
         text: `Isian berhasil dibuat via ${res.meta.provider} (${res.meta.model}) dalam ${res.meta.latency_ms} ms. Silakan tinjau sebelum menyimpan.`,
       });
+
+      if (autoGenerateMediaWithAi) {
+        void runHybridMediaGeneration({
+          scope: 'all',
+          fillEmptyOnly: autofillMode === 'fill_empty',
+          draft: {
+            title: nextTitle,
+            slug: nextSlug,
+            tagline: nextTagline,
+            summary: nextSummary,
+            category: nextCategory,
+            offerType: nextOfferType,
+            availabilityStatus: nextAvailability,
+            priceType: nextPriceType,
+            priceAmount: nextPriceAmount,
+            deliveryEstimate: nextDeliveryEstimate,
+            clientName: nextClientName,
+            demoUrl,
+            techStackText: nextTechStackText,
+            highlightsText: nextHighlightsText,
+            coverImageKey,
+            coverImageUrl,
+            galleryKeys,
+            galleryUrlsText,
+          },
+        });
+      }
     },
     onError: (err) => {
       setAutofillFeedback({
@@ -405,8 +704,15 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     setTechStackText(preAutofillSnapshot.techStackText);
     setHighlightsText(preAutofillSnapshot.highlightsText);
     setWhatsappPrefill(preAutofillSnapshot.whatsappPrefill);
+    setCoverImageKey(preAutofillSnapshot.coverImageKey);
+    setCoverPreviewSrc(preAutofillSnapshot.coverPreviewSrc);
+    setCoverImageUrl(preAutofillSnapshot.coverImageUrl);
+    setGalleryKeys(preAutofillSnapshot.galleryKeys);
+    setGalleryPreviewSrcs(preAutofillSnapshot.galleryPreviewSrcs);
+    setGalleryUrlsText(preAutofillSnapshot.galleryUrlsText);
     setPreAutofillSnapshot(null);
     setAutofillFeedback(null);
+    setMediaFeedback(null);
   };
 
   const items = portfolioQuery.data?.items ?? [];
@@ -446,9 +752,8 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     setUploadingCover(true);
     try {
       const key = await uploadFileViaPresign('portfolio', file);
-      if (coverPreviewSrc?.startsWith('blob:')) URL.revokeObjectURL(coverPreviewSrc);
       setCoverImageKey(key);
-      setCoverPreviewSrc(URL.createObjectURL(file));
+      setCoverPreviewSrc(trackBlobUrl(URL.createObjectURL(file)));
     } catch (err) {
       setFormError((err as Error).message);
     } finally {
@@ -476,7 +781,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
       for (const file of selected) {
         const key = await uploadFileViaPresign('portfolio', file);
         uploadedKeys.push(key);
-        localUrls.push(URL.createObjectURL(file));
+        localUrls.push(trackBlobUrl(URL.createObjectURL(file)));
       }
       setGalleryKeys((prev) => [...prev, ...uploadedKeys]);
       setGalleryPreviewSrcs((prev) => [...prev, ...localUrls]);
@@ -592,7 +897,8 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     );
   }
 
-  const busySubmit = createMut.isPending || updateMut.isPending || uploadingCover || uploadingGallery;
+  const busyMedia = uploadingCover || uploadingGallery || generatingMedia;
+  const busySubmit = createMut.isPending || updateMut.isPending || busyMedia;
 
   return (
     <div className="space-y-6">
@@ -1018,53 +1324,70 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
                 />
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-3 text-[11px] text-text-primary">
-                  <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 font-medium">
-                    <input
-                      type="radio"
-                      name={`${baseId}-autofill-mode`}
-                      checked={autofillMode === 'overwrite'}
-                      onChange={() => setAutofillMode('overwrite')}
-                      className="cursor-pointer accent-accent"
-                    />
-                    <span>Timpa semua draft</span>
-                  </label>
-                  <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 font-medium">
-                    <input
-                      type="radio"
-                      name={`${baseId}-autofill-mode`}
-                      checked={autofillMode === 'fill_empty'}
-                      onChange={() => setAutofillMode('fill_empty')}
-                      className="cursor-pointer accent-accent"
-                    />
-                    <span>Isi kolom kosong saja</span>
-                  </label>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-3 text-[11px] text-text-primary">
+                    <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 font-medium">
+                      <input
+                        type="radio"
+                        name={`${baseId}-autofill-mode`}
+                        checked={autofillMode === 'overwrite'}
+                        onChange={() => setAutofillMode('overwrite')}
+                        className="cursor-pointer accent-accent"
+                      />
+                      <span>Timpa semua draft</span>
+                    </label>
+                    <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 font-medium">
+                      <input
+                        type="radio"
+                        name={`${baseId}-autofill-mode`}
+                        checked={autofillMode === 'fill_empty'}
+                        onChange={() => setAutofillMode('fill_empty')}
+                        className="cursor-pointer accent-accent"
+                      />
+                      <span>Isi kolom kosong saja</span>
+                    </label>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={
+                      autofillMut.isPending ||
+                      generatingMedia ||
+                      (autofillBrief.trim().length < 4 && title.trim().length < 3)
+                    }
+                    onClick={() => {
+                      setAutofillFeedback(null);
+                      autofillMut.mutate({
+                        brief: autofillBrief.trim(),
+                        title: title.trim(),
+                        category,
+                        demo_url: demoUrl.trim(),
+                        tech_stack_hint: techStackText.trim(),
+                        language: 'id',
+                      });
+                    }}
+                    className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md border border-border-strong bg-surface px-3.5 text-xs font-semibold text-text-primary hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <span>
+                      {autofillMut.isPending
+                        ? 'Menyusun Isian...'
+                        : generatingMedia
+                          ? 'Membuat Media...'
+                          : 'Generate Isian Form'}
+                    </span>
+                  </button>
                 </div>
 
-                <button
-                  type="button"
-                  disabled={
-                    autofillMut.isPending ||
-                    (autofillBrief.trim().length < 4 && title.trim().length < 3)
-                  }
-                  onClick={() => {
-                    setAutofillFeedback(null);
-                    autofillMut.mutate({
-                      brief: autofillBrief.trim(),
-                      title: title.trim(),
-                      category,
-                      demo_url: demoUrl.trim(),
-                      tech_stack_hint: techStackText.trim(),
-                      language: 'id',
-                    });
-                  }}
-                  className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md border border-border-strong bg-surface px-3.5 text-xs font-semibold text-text-primary hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <span>
-                    {autofillMut.isPending ? 'Menyusun Isian...' : 'Generate Isian Form'}
-                  </span>
-                </button>
+                <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-2 text-[11px] font-medium text-text-primary">
+                  <input
+                    type="checkbox"
+                    checked={autoGenerateMediaWithAi}
+                    onChange={(e) => setAutoGenerateMediaWithAi(e.target.checked)}
+                    className="h-4 w-4 cursor-pointer accent-accent"
+                  />
+                  <span>Sekalian buatkan Cover & Galeri otomatis</span>
+                </label>
               </div>
 
               {autofillFeedback ? (
@@ -1312,6 +1635,86 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
             />
           </div>
 
+          {/* Hybrid Auto-Media Toolbar */}
+          <div className="space-y-2.5 rounded-lg border border-border-strong bg-surface-subtle p-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-1.5">
+                  <MonitorSmartphone className="h-4 w-4 text-accent" aria-hidden="true" />
+                  <span className="text-xs font-bold text-text-primary">
+                    Auto-Buat Media Portofolio (Hybrid)
+                  </span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-text-secondary">
+                  Jika URL Live Demo diisi, sistem mencoba memotret screenshot desktop & mobile lalu fallback otomatis ke Studio Showcase jika URL tidak aktif.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5" role="group" aria-label="Tema Studio Showcase">
+                <span className="text-[11px] font-medium text-text-secondary">Tema Studio:</span>
+                <button
+                  type="button"
+                  aria-pressed={studioTheme === 'dark'}
+                  onClick={() => setStudioTheme('dark')}
+                  className={`min-h-[36px] cursor-pointer rounded-md border px-2.5 text-[11px] font-semibold ${
+                    studioTheme === 'dark'
+                      ? 'border-accent bg-accent-soft text-[#115E59] dark:text-[#34D399]'
+                      : 'border-border bg-canvas text-text-secondary hover:text-text-primary'
+                  }`}
+                >
+                  Gelap
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={studioTheme === 'light'}
+                  onClick={() => setStudioTheme('light')}
+                  className={`min-h-[36px] cursor-pointer rounded-md border px-2.5 text-[11px] font-semibold ${
+                    studioTheme === 'light'
+                      ? 'border-accent bg-accent-soft text-[#115E59] dark:text-[#34D399]'
+                      : 'border-border bg-canvas text-text-secondary hover:text-text-primary'
+                  }`}
+                >
+                  Terang
+                </button>
+              </div>
+
+              <button
+                type="button"
+                disabled={busyMedia || (title.trim().length < 3 && !demoUrl.trim())}
+                onClick={() => void runHybridMediaGeneration({ scope: 'all' })}
+                className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md border border-border-strong bg-surface px-3.5 text-xs font-semibold text-text-primary hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <MonitorSmartphone className="h-4 w-4 text-accent" aria-hidden="true" />
+                <span>
+                  {generatingMedia ? 'Membuat Cover & Galeri...' : 'Auto-Buat Cover & Galeri'}
+                </span>
+              </button>
+            </div>
+
+            {mediaProgress ? (
+              <p role="status" className="text-[11px] font-medium text-accent">
+                {mediaProgress}
+              </p>
+            ) : null}
+
+            {mediaFeedback ? (
+              <div
+                role={mediaFeedback.kind === 'error' ? 'alert' : 'status'}
+                className={`rounded-md border px-3 py-2 text-[11px] font-medium ${
+                  mediaFeedback.kind === 'success'
+                    ? 'border-[#86EFAC] bg-[#F0FDF4] text-[#166534] dark:border-[#166534] dark:bg-[#052E16] dark:text-[#86EFAC]'
+                    : mediaFeedback.kind === 'info'
+                      ? 'border-border-strong bg-canvas text-text-primary'
+                      : 'border-[#FCA5A5] bg-danger-soft text-[#991B1B] dark:border-[#991B1B] dark:text-[#FCA5A5]'
+                }`}
+              >
+                {mediaFeedback.text}
+              </div>
+            ) : null}
+          </div>
+
           {/* Media Upload Cover */}
           <div className="space-y-2 rounded-lg border border-border bg-surface-subtle/50 p-3">
             <div className="flex items-center justify-between gap-2">
@@ -1322,7 +1725,6 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
                 <button
                   type="button"
                   onClick={() => {
-                    if (coverPreviewSrc?.startsWith('blob:')) URL.revokeObjectURL(coverPreviewSrc);
                     setCoverImageKey(null);
                     setCoverPreviewSrc(null);
                     setCoverImageUrl('');
@@ -1359,9 +1761,18 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
                 type="file"
                 accept="image/webp,image/png,image/jpeg,image/avif"
                 onChange={handleCoverUpload}
-                disabled={uploadingCover}
+                disabled={busyMedia}
                 className="sr-only"
               />
+              <button
+                type="button"
+                disabled={busyMedia || (title.trim().length < 3 && !demoUrl.trim())}
+                onClick={() => void runHybridMediaGeneration({ scope: 'cover' })}
+                className="inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 rounded-md border border-border-strong bg-canvas px-3 py-2 text-xs font-semibold text-text-primary hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <MonitorSmartphone className="h-4 w-4 text-accent" aria-hidden="true" />
+                <span>Auto-Buat Cover</span>
+              </button>
             </div>
 
             <div className="space-y-1">
@@ -1394,9 +1805,6 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
                 <button
                   type="button"
                   onClick={() => {
-                    for (const u of galleryPreviewSrcs) {
-                      if (u.startsWith('blob:')) URL.revokeObjectURL(u);
-                    }
                     setGalleryKeys([]);
                     setGalleryPreviewSrcs([]);
                   }}
@@ -1430,8 +1838,6 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
                     <button
                       type="button"
                       onClick={() => {
-                        const targetUrl = galleryPreviewSrcs[idx];
-                        if (targetUrl?.startsWith('blob:')) URL.revokeObjectURL(targetUrl);
                         setGalleryKeys((prev) => prev.filter((_, i) => i !== idx));
                         setGalleryPreviewSrcs((prev) => prev.filter((_, i) => i !== idx));
                       }}
@@ -1445,22 +1851,33 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
               </div>
             ) : null}
 
-            <label
-              htmlFor={`${baseId}-gallery-files`}
-              className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md border border-border-strong bg-surface px-3 py-2 text-xs font-semibold text-text-primary hover:bg-surface-subtle"
-            >
-              <ImagePlus className="h-4 w-4" aria-hidden="true" />
-              <span>{uploadingGallery ? 'Mengunggah screenshot...' : 'Tambah Screenshot Galeri'}</span>
-            </label>
-            <input
-              id={`${baseId}-gallery-files`}
-              type="file"
-              multiple
-              accept="image/webp,image/png,image/jpeg,image/avif"
-              onChange={handleGalleryUpload}
-              disabled={uploadingGallery || galleryKeys.length >= 8}
-              className="sr-only"
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <label
+                htmlFor={`${baseId}-gallery-files`}
+                className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md border border-border-strong bg-surface px-3 py-2 text-xs font-semibold text-text-primary hover:bg-surface-subtle"
+              >
+                <ImagePlus className="h-4 w-4" aria-hidden="true" />
+                <span>{uploadingGallery ? 'Mengunggah screenshot...' : 'Tambah Screenshot Galeri'}</span>
+              </label>
+              <input
+                id={`${baseId}-gallery-files`}
+                type="file"
+                multiple
+                accept="image/webp,image/png,image/jpeg,image/avif"
+                onChange={handleGalleryUpload}
+                disabled={busyMedia || galleryKeys.length >= 8}
+                className="sr-only"
+              />
+              <button
+                type="button"
+                disabled={busyMedia || (title.trim().length < 3 && !demoUrl.trim())}
+                onClick={() => void runHybridMediaGeneration({ scope: 'gallery' })}
+                className="inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 rounded-md border border-border-strong bg-canvas px-3 py-2 text-xs font-semibold text-text-primary hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <MonitorSmartphone className="h-4 w-4 text-accent" aria-hidden="true" />
+                <span>Auto-Buat Galeri</span>
+              </button>
+            </div>
 
             <div className="space-y-1">
               <label htmlFor={`${baseId}-gallery-urls`} className="block text-[11px] text-text-secondary">
