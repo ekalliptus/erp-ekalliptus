@@ -10,6 +10,7 @@ import {
   type PortfolioPriceType,
 } from '@ekalliptus/contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import {
   Briefcase,
   Check,
@@ -19,7 +20,9 @@ import {
   ImagePlus,
   Pencil,
   Plus,
+  RotateCcw,
   Search,
+  SlidersHorizontal,
   Star,
   Trash2,
   Upload,
@@ -94,6 +97,9 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
   const canCreate = hasPermission(me.permissions, 'portfolio', 'create');
   const canUpdate = hasPermission(me.permissions, 'portfolio', 'update');
   const canDelete = hasPermission(me.permissions, 'portfolio', 'delete');
+  const canManageAi = hasPermission(me.permissions, 'ai', 'view');
+  const canAutofill =
+    canCreate || canUpdate || hasPermission(me.permissions, 'ai', 'update');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'published' | 'draft'>('all');
@@ -137,6 +143,29 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadingGallery, setUploadingGallery] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [autofillBrief, setAutofillBrief] = useState('');
+  const [autofillMode, setAutofillMode] = useState<'overwrite' | 'fill_empty'>('overwrite');
+  const [autofillFeedback, setAutofillFeedback] = useState<{
+    kind: 'success' | 'error';
+    text: string;
+  } | null>(null);
+  const [preAutofillSnapshot, setPreAutofillSnapshot] = useState<{
+    title: string;
+    slug: string;
+    slugLockedManual: boolean;
+    tagline: string;
+    summary: string;
+    category: PortfolioCategory;
+    offerType: PortfolioOfferType;
+    availabilityStatus: PortfolioAvailabilityStatus;
+    priceType: PortfolioPriceType;
+    priceAmount: string;
+    deliveryEstimate: string;
+    clientName: string;
+    techStackText: string;
+    highlightsText: string;
+    whatsappPrefill: string;
+  } | null>(null);
 
   const portfolioQuery = useQuery({
     queryKey: ['portfolio', 'list'],
@@ -186,6 +215,10 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     setIsPublished(true);
     setSortOrder('0');
     setFormError(null);
+    setAutofillBrief('');
+    setAutofillMode('overwrite');
+    setAutofillFeedback(null);
+    setPreAutofillSnapshot(null);
   };
 
   const openCreateDrawer = () => {
@@ -196,6 +229,10 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
   const openEditDrawer = (row: PortfolioProjectRow) => {
     setEditing(row);
     setSlugLockedManual(true);
+    setAutofillBrief('');
+    setAutofillMode('fill_empty');
+    setAutofillFeedback(null);
+    setPreAutofillSnapshot(null);
     setTitle(row.title);
     setSlug(row.slug);
     setTagline(row.tagline);
@@ -275,6 +312,102 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
       setFeedback({ kind: 'error', text: (err as Error).message });
     },
   });
+
+  const autofillMut = useMutation({
+    mutationFn: erpApi.ai.portfolioAutofill,
+    onSuccess: (res) => {
+      const snapshot = {
+        title,
+        slug,
+        slugLockedManual,
+        tagline,
+        summary,
+        category,
+        offerType,
+        availabilityStatus,
+        priceType,
+        priceAmount,
+        deliveryEstimate,
+        clientName,
+        techStackText,
+        highlightsText,
+        whatsappPrefill,
+      };
+      setPreAutofillSnapshot(snapshot);
+
+      const d = res.draft;
+      const overwrite = autofillMode === 'overwrite';
+
+      if (overwrite || !title.trim()) {
+        setTitle(d.title);
+      }
+      if (!slugLockedManual && (overwrite || !slug.trim())) {
+        setSlug(d.slug);
+      }
+      if (overwrite || !tagline.trim()) {
+        setTagline(d.tagline);
+      }
+      if (overwrite || !summary.trim()) {
+        setSummary(d.summary);
+      }
+      if (overwrite) {
+        setCategory(d.category);
+        setOfferType(d.offer_type);
+        setAvailabilityStatus(d.availability_status);
+        setPriceType(d.price_type);
+      }
+      if (overwrite || !priceAmount.trim()) {
+        setPriceAmount(d.price_amount ?? '');
+      }
+      if (overwrite || !deliveryEstimate.trim()) {
+        setDeliveryEstimate(d.delivery_estimate);
+      }
+      if (overwrite || !clientName.trim()) {
+        setClientName(d.client_name);
+      }
+      if (overwrite || !techStackText.trim()) {
+        setTechStackText(d.tech_stack.join(', '));
+      }
+      if (overwrite || !highlightsText.trim()) {
+        setHighlightsText(d.highlights.join('\n'));
+      }
+      if (overwrite || !whatsappPrefill.trim()) {
+        setWhatsappPrefill(d.whatsapp_prefill);
+      }
+
+      setAutofillFeedback({
+        kind: 'success',
+        text: `Isian berhasil dibuat via ${res.meta.provider} (${res.meta.model}) dalam ${res.meta.latency_ms} ms. Silakan tinjau sebelum menyimpan.`,
+      });
+    },
+    onError: (err) => {
+      setAutofillFeedback({
+        kind: 'error',
+        text: (err as Error).message,
+      });
+    },
+  });
+
+  const handleRestoreAutofillSnapshot = () => {
+    if (!preAutofillSnapshot) return;
+    setTitle(preAutofillSnapshot.title);
+    setSlug(preAutofillSnapshot.slug);
+    setSlugLockedManual(preAutofillSnapshot.slugLockedManual);
+    setTagline(preAutofillSnapshot.tagline);
+    setSummary(preAutofillSnapshot.summary);
+    setCategory(preAutofillSnapshot.category);
+    setOfferType(preAutofillSnapshot.offerType);
+    setAvailabilityStatus(preAutofillSnapshot.availabilityStatus);
+    setPriceType(preAutofillSnapshot.priceType);
+    setPriceAmount(preAutofillSnapshot.priceAmount);
+    setDeliveryEstimate(preAutofillSnapshot.deliveryEstimate);
+    setClientName(preAutofillSnapshot.clientName);
+    setTechStackText(preAutofillSnapshot.techStackText);
+    setHighlightsText(preAutofillSnapshot.highlightsText);
+    setWhatsappPrefill(preAutofillSnapshot.whatsappPrefill);
+    setPreAutofillSnapshot(null);
+    setAutofillFeedback(null);
+  };
 
   const items = portfolioQuery.data?.items ?? [];
 
@@ -844,6 +977,125 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
               className="rounded-md border border-[#FCA5A5] bg-danger-soft p-3 text-xs font-medium text-[#991B1B] dark:border-[#991B1B] dark:text-[#FCA5A5]"
             >
               {formError}
+            </div>
+          ) : null}
+
+          {canAutofill ? (
+            <div className="space-y-3 rounded-lg border border-border-strong bg-surface-subtle p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <SlidersHorizontal className="h-4 w-4 text-accent" aria-hidden="true" />
+                  <span className="text-xs font-bold text-text-primary">
+                    Auto-Generate Isian Form (AI)
+                  </span>
+                </div>
+                {canManageAi ? (
+                  <Link
+                    to="/ai"
+                    className="text-[11px] font-semibold text-[#115E59] underline dark:text-[#34D399]"
+                  >
+                    Atur AI Management
+                  </Link>
+                ) : null}
+              </div>
+
+              <div className="space-y-1.5">
+                <label
+                  htmlFor={`${baseId}-autofill-brief`}
+                  className="block text-[11px] font-medium text-text-secondary"
+                >
+                  Tulis catatan singkat atau rincian project (AI mengisi judul, slug, tagline,
+                  deskripsi, harga, tech stack, dan deliverables).
+                </label>
+                <textarea
+                  id={`${baseId}-autofill-brief`}
+                  rows={3}
+                  maxLength={2000}
+                  value={autofillBrief}
+                  onChange={(e) => setAutofillBrief(e.target.value)}
+                  placeholder="Contoh: Aplikasi kasir & stok multi gudang untuk toko bangunan pakai React dan PostgreSQL, estimasi siap 5 hari, harga mulai 4.5 juta."
+                  className="w-full rounded-md border border-border bg-canvas px-3 py-2 text-xs text-text-primary placeholder:text-text-secondary focus:border-accent focus:outline-none"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-3 text-[11px] text-text-primary">
+                  <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 font-medium">
+                    <input
+                      type="radio"
+                      name={`${baseId}-autofill-mode`}
+                      checked={autofillMode === 'overwrite'}
+                      onChange={() => setAutofillMode('overwrite')}
+                      className="cursor-pointer accent-accent"
+                    />
+                    <span>Timpa semua draft</span>
+                  </label>
+                  <label className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 font-medium">
+                    <input
+                      type="radio"
+                      name={`${baseId}-autofill-mode`}
+                      checked={autofillMode === 'fill_empty'}
+                      onChange={() => setAutofillMode('fill_empty')}
+                      className="cursor-pointer accent-accent"
+                    />
+                    <span>Isi kolom kosong saja</span>
+                  </label>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={
+                    autofillMut.isPending ||
+                    (autofillBrief.trim().length < 4 && title.trim().length < 3)
+                  }
+                  onClick={() => {
+                    setAutofillFeedback(null);
+                    autofillMut.mutate({
+                      brief: autofillBrief.trim(),
+                      title: title.trim(),
+                      category,
+                      demo_url: demoUrl.trim(),
+                      tech_stack_hint: techStackText.trim(),
+                      language: 'id',
+                    });
+                  }}
+                  className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md border border-border-strong bg-surface px-3.5 text-xs font-semibold text-text-primary hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <span>
+                    {autofillMut.isPending ? 'Menyusun Isian...' : 'Generate Isian Form'}
+                  </span>
+                </button>
+              </div>
+
+              {autofillFeedback ? (
+                <div
+                  role="status"
+                  className={`flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-[11px] font-medium ${
+                    autofillFeedback.kind === 'success'
+                      ? 'border-[#86EFAC] bg-[#F0FDF4] text-[#166534] dark:border-[#166534] dark:bg-[#052E16] dark:text-[#86EFAC]'
+                      : 'border-[#FCA5A5] bg-danger-soft text-[#991B1B] dark:border-[#991B1B] dark:text-[#FCA5A5]'
+                  }`}
+                >
+                  <span>{autofillFeedback.text}</span>
+                  <div className="flex items-center gap-2">
+                    {preAutofillSnapshot ? (
+                      <button
+                        type="button"
+                        onClick={handleRestoreAutofillSnapshot}
+                        className="inline-flex min-h-[32px] cursor-pointer items-center gap-1 rounded border border-current px-2 font-semibold"
+                      >
+                        <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                        <span>Batalkan Auto-Fill</span>
+                      </button>
+                    ) : null}
+                    {autofillFeedback.kind === 'error' && canManageAi ? (
+                      <Link to="/ai" className="font-semibold underline">
+                        Buka AI Management
+                      </Link>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
 

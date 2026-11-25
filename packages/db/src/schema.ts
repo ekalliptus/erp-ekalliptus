@@ -11,6 +11,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  real,
   text,
   timestamp,
   unique,
@@ -593,5 +594,64 @@ export const portfolio_projects = pgTable(
       'portfolio_projects_orig_price_nonneg_chk',
       sql`original_price_amount IS NULL OR original_price_amount >= 0`,
     ),
+  ],
+);
+
+export const ai_feature_configs = pgTable(
+  'ai_feature_configs',
+  {
+    feature_key: text('feature_key').primaryKey(),
+    is_enabled: boolean('is_enabled').notNull().default(true),
+    provider: text('provider').notNull().default('zai'),
+    custom_endpoint: text('custom_endpoint'),
+    model: text('model').notNull().default('glm-4.5-air'),
+    api_key_encrypted: text('api_key_encrypted'),
+    api_key_masked: text('api_key_masked'),
+    use_shared_key: boolean('use_shared_key').notNull().default(false),
+    system_prompt: text('system_prompt').notNull().default(''),
+    temperature: real('temperature').notNull().default(0.7),
+    max_tokens: integer('max_tokens').notNull().default(512),
+    assistant_name: text('assistant_name').notNull().default('eBot'),
+    greeting_message: text('greeting_message').notNull().default(''),
+    handoff_phrases: jsonb('handoff_phrases').$type<string[]>().notNull().default([]),
+    fallback_messages: jsonb('fallback_messages').$type<string[]>().notNull().default([]),
+    extra_instructions: text('extra_instructions').notNull().default(''),
+    updated_by: uuid('updated_by').references(() => employees.id),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  () => [
+    check(
+      'ai_feature_configs_feature_chk',
+      sql`feature_key IN ('consult', 'portfolio_autofill')`,
+    ),
+    check(
+      'ai_feature_configs_provider_chk',
+      sql`provider IN ('zai', 'gemini', 'openai', 'openrouter', 'groq', 'custom')`,
+    ),
+    check('ai_feature_configs_temp_chk', sql`temperature >= 0 AND temperature <= 2`),
+    check('ai_feature_configs_tokens_chk', sql`max_tokens >= 64 AND max_tokens <= 4096`),
+  ],
+);
+
+export const ai_usage_logs = pgTable(
+  'ai_usage_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    feature_key: text('feature_key').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    status: text('status').notNull(),
+    latency_ms: integer('latency_ms').notNull().default(0),
+    prompt_tokens: integer('prompt_tokens'),
+    completion_tokens: integer('completion_tokens'),
+    total_tokens: integer('total_tokens'),
+    error_message: text('error_message'),
+    actor_id: uuid('actor_id').references(() => employees.id),
+    source: text('source').notNull().default('erp'),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('ai_usage_logs_created_idx').on(table.created_at.desc()),
+    index('ai_usage_logs_feature_created_idx').on(table.feature_key, table.created_at.desc()),
   ],
 );

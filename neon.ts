@@ -38,6 +38,7 @@ export default defineConfig({
       env: {
         ERP_REALTIME_SECRET: { value: process.env.NEON_REALTIME_SECRET, required: true },
         FCM_SERVICE_ACCOUNT_JSON: { value: process.env.FCM_SERVICE_ACCOUNT_JSON, required: false },
+        AI_ENCRYPTION_KEY: { value: process.env.AI_ENCRYPTION_KEY, required: false },
         WEB_ALLOWED_ORIGINS: {
           value:
             process.env.WEB_ALLOWED_ORIGINS ||

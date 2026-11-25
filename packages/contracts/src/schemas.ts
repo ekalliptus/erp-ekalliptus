@@ -544,3 +544,151 @@ export type PortfolioCategory = (typeof PORTFOLIO_CATEGORIES)[number];
 export type PortfolioOfferType = (typeof PORTFOLIO_OFFER_TYPES)[number];
 export type PortfolioAvailabilityStatus = (typeof PORTFOLIO_AVAILABILITY_STATUSES)[number];
 export type PortfolioPriceType = (typeof PORTFOLIO_PRICE_TYPES)[number];
+
+export const AI_FEATURE_KEYS = ['consult', 'portfolio_autofill'] as const;
+export const AI_PROVIDERS = [
+  'zai',
+  'gemini',
+  'openai',
+  'openrouter',
+  'groq',
+  'custom',
+] as const;
+
+export type AiFeatureKey = (typeof AI_FEATURE_KEYS)[number];
+export type AiProvider = (typeof AI_PROVIDERS)[number];
+
+export const AI_PROVIDER_PRESETS: Record<
+  AiProvider,
+  {
+    label: string;
+    endpoint: string;
+    defaultModel: string;
+    suggestedModels: readonly string[];
+  }
+> = {
+  zai: {
+    label: 'Z.ai (GLM)',
+    endpoint: 'https://api.z.ai/api/paas/v4/chat/completions',
+    defaultModel: 'glm-4.5-air',
+    suggestedModels: ['glm-4.5-air', 'glm-4.5', 'glm-4-plus'],
+  },
+  gemini: {
+    label: 'Google Gemini',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    defaultModel: 'gemini-2.5-flash',
+    suggestedModels: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+  },
+  openai: {
+    label: 'OpenAI',
+    endpoint: 'https://api.openai.com/v1/chat/completions',
+    defaultModel: 'gpt-4o-mini',
+    suggestedModels: ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4.1'],
+  },
+  openrouter: {
+    label: 'OpenRouter',
+    endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+    defaultModel: 'openai/gpt-4o-mini',
+    suggestedModels: [
+      'openai/gpt-4o-mini',
+      'google/gemini-2.5-flash',
+      'anthropic/claude-3.5-haiku',
+    ],
+  },
+  groq: {
+    label: 'Groq',
+    endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+    defaultModel: 'llama-3.3-70b-versatile',
+    suggestedModels: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+  },
+  custom: {
+    label: 'Custom (OpenAI-Compatible)',
+    endpoint: '',
+    defaultModel: '',
+    suggestedModels: [],
+  },
+};
+
+export const aiFeatureKeySchema = z.enum(AI_FEATURE_KEYS);
+export const aiProviderSchema = z.enum(AI_PROVIDERS);
+
+export const updateAiFeatureConfigSchema = z
+  .object({
+    feature_key: aiFeatureKeySchema,
+    is_enabled: z.boolean(),
+    provider: aiProviderSchema,
+    custom_endpoint: z.string().trim().max(500).nullable().optional(),
+    model: z.string().trim().min(1).max(140),
+    api_key: z.string().trim().max(400).nullable().optional(),
+    clear_api_key: z.boolean().optional().default(false),
+    use_shared_key: z.boolean().optional().default(false),
+    system_prompt: z.string().trim().max(8000).default(''),
+    temperature: z.number().min(0).max(2).default(0.7),
+    max_tokens: z.number().int().min(64).max(4096).default(512),
+    assistant_name: z.string().trim().min(1).max(60).optional(),
+    greeting_message: z.string().trim().max(1000).optional(),
+    handoff_phrases: z.array(z.string().trim().min(1).max(100)).max(30).optional(),
+    fallback_messages: z.array(z.string().trim().min(1).max(500)).max(10).optional(),
+    extra_instructions: z.string().trim().max(2000).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const endpoint = data.custom_endpoint?.trim() ?? '';
+    const usesShared = data.feature_key === 'portfolio_autofill' && data.use_shared_key;
+    if (data.provider === 'custom' && !usesShared && !endpoint) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['custom_endpoint'],
+        message: 'Custom endpoint HTTPS wajib diisi untuk provider custom.',
+      });
+      return;
+    }
+    if (endpoint.length > 0) {
+      try {
+        const parsed = new URL(endpoint);
+        if (parsed.protocol !== 'https:' || parsed.hostname.length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['custom_endpoint'],
+            message: 'Endpoint AI harus memakai URL https:// yang valid.',
+          });
+        }
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['custom_endpoint'],
+          message: 'Endpoint AI tidak valid.',
+        });
+      }
+    }
+  });
+
+export const testAiConfigSchema = z.object({
+  feature_key: aiFeatureKeySchema,
+  prompt: z.string().trim().min(2).max(1000),
+});
+
+export const portfolioAutofillRequestSchema = z
+  .object({
+    brief: z.string().trim().max(2000).optional().default(''),
+    title: z.string().trim().max(140).optional().default(''),
+    category: portfolioCategorySchema.optional(),
+    demo_url: z.string().trim().max(500).optional().default(''),
+    tech_stack_hint: z.string().trim().max(400).optional().default(''),
+    language: z.enum(['id', 'en']).optional().default('id'),
+  })
+  .refine((data) => data.brief.length >= 4 || data.title.length >= 3, {
+    message: 'Isi catatan singkat minimal 4 karakter atau judul project minimal 3 karakter.',
+  });
+
+export const publicAiConsultRequestSchema = z.object({
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().trim().min(1).max(1000),
+      }),
+    )
+    .min(1)
+    .max(10),
+  locale: z.string().trim().max(10).optional().default('id'),
+});

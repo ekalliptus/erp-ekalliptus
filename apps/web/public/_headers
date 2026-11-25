@@ -31,6 +31,9 @@
 /portfolio
   Cache-Control: no-cache, no-store, must-revalidate
 
+/ai
+  Cache-Control: no-cache, no-store, must-revalidate
+
 /rbac
   Cache-Control: no-cache, no-store, must-revalidate
 

@@ -6,6 +6,7 @@ export const ERP_MODULES = [
   'rbac',
   'audit',
   'portfolio',
+  'ai',
 ] as const;
 
 export const ERP_ACTIONS = [

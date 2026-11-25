@@ -21,6 +21,7 @@ import {
 import { resolveMeKpiScopes } from './services/security-policy.js';
 import { createPresignedDownloadUrl } from './services/storage.js';
 import { createAuthMiddleware, extractBearerToken, verifyAuthToken } from './middleware/auth.js';
+import { aiPlugin, publicAiPlugin } from './modules/ai.js';
 import { appReleasesPlugin } from './modules/app-releases.js';
 import { attendancePlugin } from './modules/attendance.js';
 import { financePlugin } from './modules/finance.js';
@@ -192,6 +193,8 @@ app.use('/api/*', async (c, next) => {
     c.req.path === '/api/auth/username-lookup' ||
     c.req.path === '/api/auth/claim-preview' ||
     c.req.path === '/api/auth/claim' ||
+    (c.req.path === '/api/public/ai/consult-config' && c.req.method === 'GET') ||
+    (c.req.path === '/api/public/ai/consult' && c.req.method === 'POST') ||
     ((c.req.path === '/api/app/version' ||
       c.req.path === '/api/app/changelog' ||
       c.req.path === '/api/app/download/android' ||
@@ -302,6 +305,8 @@ app.get('/api/me', async (c) => {
 const apiRouter = new Hono<AppEnv>();
 registerErpPlugins(apiRouter, [
   appReleasesPlugin,
+  aiPlugin,
+  publicAiPlugin,
   portfolioPlugin,
   publicPortfolioPlugin,
   profilePlugin,

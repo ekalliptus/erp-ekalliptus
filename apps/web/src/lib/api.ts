@@ -1,4 +1,6 @@
 import type {
+  AiFeatureKey,
+  AiProvider,
   PortfolioAvailabilityStatus,
   PortfolioCategory,
   PortfolioOfferType,
@@ -818,6 +820,138 @@ export interface CreatePortfolioPayload {
 
 export type UpdatePortfolioPayload = Partial<CreatePortfolioPayload>;
 
+export interface AiProviderPresetView {
+  label: string;
+  endpoint: string;
+  defaultModel: string;
+  suggestedModels: string[];
+}
+
+export interface AiFeatureConfigView {
+  feature_key: AiFeatureKey;
+  is_enabled: boolean;
+  provider: AiProvider;
+  custom_endpoint: string | null;
+  model: string;
+  has_api_key: boolean;
+  api_key_masked: string;
+  use_shared_key: boolean;
+  system_prompt: string;
+  temperature: number;
+  max_tokens: number;
+  assistant_name: string;
+  greeting_message: string;
+  handoff_phrases: string[];
+  fallback_messages: string[];
+  extra_instructions: string;
+  updated_at: string;
+}
+
+export interface AiConfigResponse {
+  presets: Record<AiProvider, AiProviderPresetView>;
+  configs: {
+    consult: AiFeatureConfigView | null;
+    portfolio_autofill: AiFeatureConfigView | null;
+  };
+}
+
+export interface UpdateAiConfigPayload {
+  feature_key: AiFeatureKey;
+  is_enabled: boolean;
+  provider: AiProvider;
+  custom_endpoint?: string | null;
+  model: string;
+  api_key?: string | null;
+  clear_api_key?: boolean;
+  use_shared_key?: boolean;
+  system_prompt: string;
+  temperature: number;
+  max_tokens: number;
+  assistant_name?: string;
+  greeting_message?: string;
+  handoff_phrases?: string[];
+  fallback_messages?: string[];
+  extra_instructions?: string;
+}
+
+export interface AiTestResponse {
+  ok: boolean;
+  provider: AiProvider;
+  model: string;
+  latency_ms: number;
+  usage?: {
+    prompt_tokens: number | null;
+    completion_tokens: number | null;
+    total_tokens: number | null;
+  };
+  reply?: string;
+  parsed_preview?: PortfolioAutofillDraft | null;
+  error?: string;
+}
+
+export interface AiUsageLogRow {
+  id: string;
+  feature_key: AiFeatureKey;
+  provider: string;
+  model: string;
+  status: string;
+  latency_ms: number;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  error_message: string | null;
+  source: string;
+  created_at: string;
+}
+
+export interface AiLogsResponse {
+  summary_7d: {
+    total: number;
+    success: number;
+    failed: number;
+    avg_latency_ms: number;
+    total_tokens: number;
+  };
+  logs: AiUsageLogRow[];
+}
+
+export interface PortfolioAutofillRequest {
+  brief?: string;
+  title?: string;
+  category?: PortfolioCategory;
+  demo_url?: string;
+  tech_stack_hint?: string;
+  language?: 'id' | 'en';
+}
+
+export interface PortfolioAutofillDraft {
+  title: string;
+  slug: string;
+  tagline: string;
+  summary: string;
+  category: PortfolioCategory;
+  offer_type: PortfolioOfferType;
+  availability_status: PortfolioAvailabilityStatus;
+  price_type: PortfolioPriceType;
+  price_amount: string | null;
+  delivery_estimate: string;
+  client_name: string;
+  tech_stack: string[];
+  highlights: string[];
+  whatsapp_prefill: string;
+}
+
+export interface PortfolioAutofillResponse {
+  ok: true;
+  draft: PortfolioAutofillDraft;
+  meta: {
+    provider: AiProvider;
+    model: string;
+    latency_ms: number;
+    total_tokens: number | null;
+  };
+}
+
 export const erpApi = {
   fetchMe: () => apiFetch<MeResponse>('/api/me'),
 
@@ -1283,6 +1417,32 @@ export const erpApi = {
     remove: (id: string) =>
       apiFetch<{ ok: boolean; id: string }>(`/api/portfolio/${id}`, {
         method: 'DELETE',
+      }),
+  },
+
+  ai: {
+    getConfig: () => apiFetch<AiConfigResponse>('/api/ai/config'),
+    updateConfig: (body: UpdateAiConfigPayload) =>
+      apiFetch<{ config: AiFeatureConfigView }>('/api/ai/config', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    test: (body: { feature_key: AiFeatureKey; prompt: string }) =>
+      apiFetch<AiTestResponse>('/api/ai/test', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    logs: (params?: { feature?: 'all' | AiFeatureKey; limit?: number }) => {
+      const qs = new URLSearchParams();
+      if (params?.feature && params.feature !== 'all') qs.set('feature', params.feature);
+      if (params?.limit) qs.set('limit', String(params.limit));
+      const suffix = qs.toString() ? `?${qs.toString()}` : '';
+      return apiFetch<AiLogsResponse>(`/api/ai/logs${suffix}`);
+    },
+    portfolioAutofill: (body: PortfolioAutofillRequest) =>
+      apiFetch<PortfolioAutofillResponse>('/api/ai/portfolio-autofill', {
+        method: 'POST',
+        body: JSON.stringify(body),
       }),
   },
 

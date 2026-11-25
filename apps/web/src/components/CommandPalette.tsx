@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Boxes,
   Briefcase,
+  Cpu,
   FileSpreadsheet,
   Fingerprint,
   LayoutDashboard,
@@ -108,6 +109,16 @@ export function CommandPalette({
         hint: 'Upload & kelola katalog project untuk web ekalliptus.com',
         path: '/portfolio',
         icon: Briefcase,
+      });
+    }
+    if (hasPermission(perms, 'ai', 'view')) {
+      list.push({
+        id: 'nav-ai',
+        group: 'Kontrol',
+        label: 'AI Management',
+        hint: 'Provider, API key, prompt AI Konsultasi web & Auto-Fill Portofolio',
+        path: '/ai',
+        icon: Cpu,
       });
     }
     if (hasPermission(perms, 'rbac', 'view')) {

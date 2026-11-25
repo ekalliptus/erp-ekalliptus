@@ -17,7 +17,7 @@ import {
 config({ path: '.env.local' });
 config({ path: '.env' });
 
-const MODULES = ['finance', 'inventory', 'attendance', 'payroll', 'rbac', 'audit', 'portfolio'] as const;
+const MODULES = ['finance', 'inventory', 'attendance', 'payroll', 'rbac', 'audit', 'portfolio', 'ai'] as const;
 const ACTIONS = ['view', 'create', 'update', 'delete', 'approve', 'export'] as const;
 
 const ROLE_DEFS = [

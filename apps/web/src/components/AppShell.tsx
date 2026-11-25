@@ -6,6 +6,7 @@ import {
   Boxes,
   Briefcase,
   Command,
+  Cpu,
   FileSpreadsheet,
   Fingerprint,
   LayoutDashboard,
@@ -44,6 +45,7 @@ interface NavEntry {
     | '/attendance'
     | '/payroll'
     | '/portfolio'
+    | '/ai'
     | '/rbac'
     | '/audit'
     | '/profile';
@@ -56,6 +58,7 @@ interface NavEntry {
     | 'attendance'
     | 'payroll'
     | 'portfolio'
+    | 'ai'
     | 'rbac'
     | 'audit';
 }
@@ -84,6 +87,13 @@ const NAV_ENTRIES: NavEntry[] = [
     group: 'Operasional',
     icon: Briefcase,
     module: 'portfolio',
+  },
+  {
+    to: '/ai',
+    label: 'AI Management',
+    group: 'Kontrol',
+    icon: Cpu,
+    module: 'ai',
   },
   { to: '/rbac', label: 'Akses & Tim', group: 'Kontrol', icon: Users, module: 'rbac' },
   { to: '/audit', label: 'Audit Trail', group: 'Kontrol', icon: ShieldCheck, module: 'audit' },

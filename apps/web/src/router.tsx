@@ -47,6 +47,9 @@ const PayrollPage = lazyWithRetry(() =>
 const PortfolioPage = lazyWithRetry(() =>
   import('./routes/PortfolioPage.tsx').then((m) => ({ default: m.PortfolioPage })),
 );
+const AiManagementPage = lazyWithRetry(() =>
+  import('./routes/AiManagementPage.tsx').then((m) => ({ default: m.AiManagementPage })),
+);
 const RbacPage = lazyWithRetry(() =>
   import('./routes/RbacPage.tsx').then((m) => ({ default: m.RbacPage })),
 );
@@ -285,6 +288,17 @@ const portfolioRoute = createRoute({
   ),
 });
 
+const aiRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/ai',
+  component: () => (
+    <AuthenticatedFrame
+      skeletonVariant="ai"
+      renderPage={(me) => <AiManagementPage me={me} />}
+    />
+  ),
+});
+
 const rbacRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/rbac',
@@ -326,6 +340,7 @@ const routeTree = rootRoute.addChildren([
   attendanceRoute,
   payrollRoute,
   portfolioRoute,
+  aiRoute,
   rbacRoute,
   auditRoute,
   profileRoute,
