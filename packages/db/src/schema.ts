@@ -680,6 +680,14 @@ export const print_devices = pgTable('print_devices', {
   openwa_qr_code: text('openwa_qr_code'),
   openwa_link_code: text('openwa_link_code'),
   openwa_qr_updated_at: timestamp('openwa_qr_updated_at', { withTimezone: true }),
+  dry_run_mode: boolean('dry_run_mode').notNull().default(false),
+  pending_command: text('pending_command'),
+  pending_command_payload: jsonb('pending_command_payload')
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({}),
+  pending_command_at: timestamp('pending_command_at', { withTimezone: true }),
+  last_command_result: text('last_command_result'),
   created_by: uuid('created_by').references(() => employees.id),
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

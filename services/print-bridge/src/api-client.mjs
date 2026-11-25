@@ -102,6 +102,13 @@ export class PrintBridgeApiClient {
     });
   }
 
+  ackCommand(payload) {
+    return this._requestJson('/api/print-agent/command/ack', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async downloadFileBuffer(downloadUrl) {
     const res = await fetch(downloadUrl);
     if (!res.ok) {

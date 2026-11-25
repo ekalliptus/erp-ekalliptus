@@ -180,13 +180,15 @@ async function executeJobPrint(job, downloadUrl, preferredHost, dryRun) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const dryRun =
-    args.includes('--dry-run') ||
-    String(process.env.PRINT_DRY_RUN || 'false').toLowerCase() === 'true';
-  const preferredHost = (process.env.PRINTER_HOST || '192.168.0.5').trim() || null;
+  const cliDryRun = args.includes('--dry-run');
+  const envDryRun = String(process.env.PRINT_DRY_RUN || 'false').toLowerCase() === 'true';
+  let serverDryRun = null;
+  let effectiveHost = (process.env.PRINTER_HOST || '192.168.0.5').trim() || null;
+
+  const isDryRunActive = () => cliDryRun || envDryRun || Boolean(serverDryRun);
 
   if (args.includes('--verify-printer')) {
-    const result = await runVerifyPrinter(preferredHost);
+    const result = await runVerifyPrinter(effectiveHost);
     if (!result.reachable || !result.ok) {
       process.exitCode = 1;
     }
@@ -209,12 +211,104 @@ async function main() {
   let heartbeatInFlight = false;
   let heartbeatQueued = false;
   let heartbeatConfirmed = false;
+  let commandInFlight = false;
   let openwa = {
     getStatus: () => 'disconnected',
     getPairingState: () => ({ qrCode: null, linkCode: null }),
+    reconnect: async () => {},
+    disconnect: async () => {},
     sendText: async () => false,
     close: async () => {},
   };
+
+  async function executePendingCommand(cmd) {
+    if (!cmd || !cmd.command || commandInFlight) return;
+    commandInFlight = true;
+    const action = String(cmd.command);
+    try {
+      if (!enableOpenWa) {
+        await apiClient.ackCommand({
+          command: action,
+          ok: false,
+          message: 'OpenWA dinonaktifkan di bridge (ENABLE_OPENWA=false).',
+        });
+        return;
+      }
+
+      if (action === 'connect_qr') {
+        if (openwa.getStatus() === 'connected') {
+          await apiClient.ackCommand({
+            command: action,
+            ok: true,
+            message: 'WhatsApp sudah terhubung.',
+          });
+        } else {
+          void openwa.reconnect({ clearSession: false, linkCode: '' });
+          await apiClient.ackCommand({
+            command: action,
+            ok: true,
+            message: 'Memulai sesi QR WhatsApp...',
+          });
+        }
+        return;
+      }
+
+      if (action === 'reset_qr') {
+        void openwa.reconnect({ clearSession: true, linkCode: '' });
+        await apiClient.ackCommand({
+          command: action,
+          ok: true,
+          message: 'Sesi direset, membuat QR Code baru...',
+        });
+        return;
+      }
+
+      if (action === 'pair_link_code') {
+        const phone = String(cmd.payload?.phone || '').replace(/[^\d]/g, '');
+        if (!phone) {
+          await apiClient.ackCommand({
+            command: action,
+            ok: false,
+            message: 'Nomor WhatsApp pairing tidak ditemukan.',
+          });
+          return;
+        }
+        void openwa.reconnect({ clearSession: true, linkCode: phone });
+        await apiClient.ackCommand({
+          command: action,
+          ok: true,
+          message: 'Membuat kode pairing 8 digit...',
+        });
+        return;
+      }
+
+      if (action === 'logout_wa') {
+        await openwa.disconnect({ clearSession: true });
+        await apiClient.ackCommand({
+          command: action,
+          ok: true,
+          message: 'Sesi WhatsApp diputuskan.',
+        });
+        return;
+      }
+
+      await apiClient.ackCommand({
+        command: action,
+        ok: false,
+        message: `Perintah tidak dikenal: ${action}`,
+      });
+    } catch (err) {
+      await apiClient
+        .ackCommand({
+          command: action,
+          ok: false,
+          message: err instanceof Error ? err.message.slice(0, 280) : 'Gagal menjalankan perintah.',
+        })
+        .catch(() => {});
+    } finally {
+      commandInFlight = false;
+    }
+  }
 
   async function tickHeartbeat() {
     if (heartbeatInFlight) {
@@ -223,12 +317,12 @@ async function main() {
     }
     heartbeatInFlight = true;
     try {
-      const probe = await safeResolvePrinter(preferredHost);
+      const probe = await safeResolvePrinter(effectiveHost);
       const p = probe.printer;
       const openwaStatus = openwa.getStatus();
       const pairing = openwa.getPairingState();
-      await apiClient.heartbeat({
-        printer_host: p?.ip || preferredHost,
+      const hbRes = await apiClient.heartbeat({
+        printer_host: p?.ip || effectiveHost,
         printer_model: p?.model || 'HP Smart Tank 580-590 series',
         printer_state: probe.online ? p.stateText : 'offline',
         printer_state_reasons: probe.online
@@ -241,11 +335,25 @@ async function main() {
         openwa_qr_code: openwaStatus === 'qr_required' ? pairing.qrCode : null,
         openwa_link_code: openwaStatus === 'qr_required' ? pairing.linkCode : null,
       });
+
+      if (hbRes?.config) {
+        if (typeof hbRes.config.dry_run_mode === 'boolean') {
+          serverDryRun = hbRes.config.dry_run_mode;
+        }
+        if (typeof hbRes.config.host === 'string' && hbRes.config.host.trim()) {
+          effectiveHost = hbRes.config.host.trim();
+        }
+      }
+
       if (!heartbeatConfirmed) {
         heartbeatConfirmed = true;
         console.log(
-          `[heartbeat] Terhubung ke ERP API (device online, printer=${probe.online ? p.stateText : 'offline'}).`,
+          `[heartbeat] Terhubung ke ERP API (device online, printer=${probe.online ? p.stateText : 'offline'}, dryRun=${isDryRunActive()}).`,
         );
+      }
+
+      if (hbRes?.pending_command) {
+        await executePendingCommand(hbRes.pending_command);
       }
     } catch (err) {
       heartbeatConfirmed = false;
@@ -274,7 +382,7 @@ async function main() {
   }
 
   console.log(
-    `[bridge] Smart Printer Bridge berjalan (dryRun=${dryRun}, openwa=${enableOpenWa ? 'enabled' : 'disabled'}, host=${preferredHost || 'auto'})`,
+    `[bridge] Smart Printer Bridge berjalan (dryRun=${isDryRunActive()}, openwa=${enableOpenWa ? 'enabled' : 'disabled'}, host=${effectiveHost || 'auto'})`,
   );
 
   let isPrinting = false;
@@ -288,9 +396,10 @@ async function main() {
       if (!claimed?.job || !claimed?.download_url) return;
 
       const job = claimed.job;
-      console.log(`[queue] Memproses ${job.job_code} (${job.file_name}) [dryRun=${dryRun}]`);
+      const runDry = isDryRunActive();
+      console.log(`[queue] Memproses ${job.job_code} (${job.file_name}) [dryRun=${runDry}]`);
       try {
-        const result = await executeJobPrint(job, claimed.download_url, preferredHost, dryRun);
+        const result = await executeJobPrint(job, claimed.download_url, effectiveHost, runDry);
         await apiClient.submitJobResult(job.id, result);
         console.log(`[queue] Selesai ${job.job_code} -> printed (ippJob=${result.ipp_job_id ?? 'dry-run'})`);
       } catch (err) {
@@ -299,7 +408,7 @@ async function main() {
         await apiClient.submitJobResult(job.id, {
           status: 'failed',
           error_message: msg.slice(0, 480),
-          dry_run: dryRun,
+          dry_run: runDry,
         });
       }
     } catch (err) {
@@ -333,7 +442,7 @@ async function main() {
   }
 
   await tickHeartbeat();
-  const hbTimer = setInterval(tickHeartbeat, 15_000);
+  const hbTimer = setInterval(tickHeartbeat, 5_000);
   const qTimer = setInterval(tickQueue, 3_000);
   const waTimer = setInterval(tickOutbox, 3_000);
 

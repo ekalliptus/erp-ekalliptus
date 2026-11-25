@@ -760,6 +760,48 @@ export const createPrintDeviceSchema = z.object({
   model: z.string().trim().max(120).optional().nullable(),
 });
 
+export const updatePrintDeviceSchema = z.object({
+  device_name: z.string().trim().min(2).max(120).optional(),
+  host: z.string().trim().max(120).optional().nullable(),
+  mdns_host: z.string().trim().max(160).optional().nullable(),
+  model: z.string().trim().max(120).optional(),
+  is_active: z.boolean().optional(),
+  dry_run_mode: z.boolean().optional(),
+});
+
+export const PRINT_DEVICE_WA_ACTIONS = [
+  'connect_qr',
+  'reset_qr',
+  'pair_link_code',
+  'logout_wa',
+] as const;
+
+export type PrintDeviceWaAction = (typeof PRINT_DEVICE_WA_ACTIONS)[number];
+
+export const deviceWhatsappActionSchema = z
+  .object({
+    action: z.enum(PRINT_DEVICE_WA_ACTIONS),
+    phone: z
+      .string()
+      .trim()
+      .max(24)
+      .transform((v) => v.replace(/[^\d]/g, ''))
+      .optional()
+      .nullable(),
+  })
+  .refine(
+    (d) =>
+      d.action !== 'pair_link_code' ||
+      (Boolean(d.phone) && d.phone!.length >= 10 && d.phone!.length <= 16),
+    { message: 'Nomor WhatsApp wajib diisi (10-16 digit, format 628xxx).' },
+  );
+
+export const printAgentCommandAckSchema = z.object({
+  command: z.string().trim().min(1).max(64),
+  ok: z.boolean(),
+  message: z.string().trim().max(300).optional().nullable(),
+});
+
 export const printAgentHeartbeatSchema = z.object({
   printer_host: z.string().trim().max(120).optional().nullable(),
   printer_model: z.string().trim().max(120).optional().nullable(),

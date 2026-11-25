@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { approvePrintJobSchema, upsertPrintPricingRuleSchema } from '@ekalliptus/contracts';
+import {
+  approvePrintJobSchema,
+  deviceWhatsappActionSchema,
+  updatePrintDeviceSchema,
+  upsertPrintPricingRuleSchema,
+} from '@ekalliptus/contracts';
 import {
   calculatePrintJobPricing,
   hashAgentToken,
@@ -112,13 +117,24 @@ describe('Smart Printer unit logic', () => {
       openwa_qr_code: '2@sample_qr_payload',
       openwa_link_code: '12345678',
       openwa_qr_updated_at: now,
+      dry_run_mode: true,
+      pending_command: 'pair_link_code',
+      pending_command_payload: { phone: '6281234567890' },
+      pending_command_at: now,
+      last_command_result: null,
       created_by: null,
       created_at: now,
       updated_at: now,
     };
 
-    const allowedWeb = sanitizeDeviceForClient(baseRow, { includePairing: true });
+    const allowedWeb = sanitizeDeviceForClient(baseRow, { includePairing: true }) as Record<
+      string,
+      unknown
+    >;
     assert.equal('agent_token_hash' in allowedWeb, false);
+    assert.equal('pending_command_payload' in allowedWeb, false);
+    assert.equal(allowedWeb.dry_run_mode, true);
+    assert.equal(allowedWeb.pending_command, 'pair_link_code');
     assert.equal(allowedWeb.is_online, true);
     assert.equal(allowedWeb.openwa_qr_code, '2@sample_qr_payload');
     assert.equal(allowedWeb.openwa_link_code, '12345678');
@@ -144,5 +160,30 @@ describe('Smart Printer unit logic', () => {
       { includePairing: true },
     );
     assert.equal(strippedExpiredQr.openwa_qr_code, null);
+  });
+
+  it('validates updatePrintDeviceSchema and deviceWhatsappActionSchema rules', () => {
+    const upd = updatePrintDeviceSchema.safeParse({
+      device_name: 'HP Smart Tank Toko 1',
+      host: '192.168.0.5',
+      dry_run_mode: true,
+      is_active: true,
+    });
+    assert.equal(upd.success, true);
+
+    const missingPhone = deviceWhatsappActionSchema.safeParse({
+      action: 'pair_link_code',
+      phone: '',
+    });
+    assert.equal(missingPhone.success, false);
+
+    const formattedPhone = deviceWhatsappActionSchema.safeParse({
+      action: 'pair_link_code',
+      phone: '+62 819-9990-0306',
+    });
+    assert.equal(formattedPhone.success, true);
+    if (formattedPhone.success) {
+      assert.equal(formattedPhone.data.phone, '6281999900306');
+    }
   });
 });

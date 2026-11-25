@@ -3,14 +3,17 @@ import {
   approvePrintJobSchema,
   createManualPrintJobSchema,
   createPrintDeviceSchema,
+  deviceWhatsappActionSchema,
   hasPermission,
   postPrintJobFinanceSchema,
+  printAgentCommandAckSchema,
   printAgentHeartbeatSchema,
   printAgentIngestJobSchema,
   printAgentJobResultSchema,
   printAgentOutboxAckSchema,
   printAgentPresignUploadSchema,
   rejectPrintJobSchema,
+  updatePrintDeviceSchema,
   updatePrintJobOptionsSchema,
   upsertPrintPricingRuleSchema,
   type PlatformKind,
@@ -228,6 +231,7 @@ export function sanitizeDeviceForClient(
     openwa_qr_code,
     openwa_link_code,
     openwa_qr_updated_at,
+    pending_command_payload: _pendingPayload,
     ...rest
   } = row;
   const lastHb = row.last_heartbeat_at ? row.last_heartbeat_at.getTime() : 0;
@@ -640,6 +644,196 @@ printerRouter.post('/devices/:id/rotate-token', requirePermission('printer', 'up
   return c.json({
     device: sanitizeDeviceForClient(updated),
     agent_token: rawToken,
+  });
+});
+
+printerRouter.patch('/devices/:id', requirePermission('printer', 'update'), async (c) => {
+  const id = c.req.param('id') ?? '';
+  if (!UUID_RE.test(id)) return c.json({ error: 'ID perangkat printer tidak valid.' }, 400);
+
+  const body = await c.req.json().catch(() => null);
+  const parsed = updatePrintDeviceSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+  const d = parsed.data;
+  const auth = c.get('auth');
+
+  const result = await getDb().transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(print_devices)
+      .where(eq(print_devices.id, id))
+      .limit(1);
+    if (!existing) return null;
+
+    const patch: Partial<typeof print_devices.$inferInsert> = {
+      updated_at: new Date(),
+    };
+    if (d.device_name !== undefined) patch.device_name = d.device_name;
+    if (d.host !== undefined) patch.host = d.host || null;
+    if (d.mdns_host !== undefined) patch.mdns_host = d.mdns_host || null;
+    if (d.model !== undefined) patch.model = d.model;
+    if (d.is_active !== undefined) patch.is_active = d.is_active;
+    if (d.dry_run_mode !== undefined) patch.dry_run_mode = d.dry_run_mode;
+
+    const [device] = await tx
+      .update(print_devices)
+      .set(patch)
+      .where(eq(print_devices.id, id))
+      .returning();
+
+    await writeAuditLog(tx, {
+      actorId: auth.employee.id,
+      platform: auth.platform,
+      module: 'printer',
+      action: 'update_device',
+      entityId: id,
+      beforeData: {
+        device_name: existing.device_name,
+        host: existing.host,
+        mdns_host: existing.mdns_host,
+        model: existing.model,
+        is_active: existing.is_active,
+        dry_run_mode: existing.dry_run_mode,
+      },
+      afterData: {
+        device_name: device.device_name,
+        host: device.host,
+        mdns_host: device.mdns_host,
+        model: device.model,
+        is_active: device.is_active,
+        dry_run_mode: device.dry_run_mode,
+      },
+    });
+
+    await emitErpEvent(tx, 'erp:printer', 'device_updated', {
+      device_id: id,
+      device_name: device.device_name,
+      dry_run_mode: device.dry_run_mode,
+      is_active: device.is_active,
+    });
+
+    return device;
+  });
+
+  if (!result) return c.json({ error: 'Perangkat printer tidak ditemukan.' }, 404);
+  return c.json({ device: sanitizeDeviceForClient(result) });
+});
+
+printerRouter.delete('/devices/:id', requirePermission('printer', 'delete'), async (c) => {
+  const id = c.req.param('id') ?? '';
+  if (!UUID_RE.test(id)) return c.json({ error: 'ID perangkat printer tidak valid.' }, 400);
+
+  const auth = c.get('auth');
+  const deleted = await getDb().transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(print_devices)
+      .where(eq(print_devices.id, id))
+      .limit(1);
+    if (!existing) return null;
+
+    await tx
+      .update(print_jobs)
+      .set({ device_id: null, updated_at: new Date() })
+      .where(eq(print_jobs.device_id, id));
+
+    await tx
+      .update(print_wa_outbox)
+      .set({ device_id: null })
+      .where(eq(print_wa_outbox.device_id, id));
+
+    await tx.delete(print_devices).where(eq(print_devices.id, id));
+
+    await writeAuditLog(tx, {
+      actorId: auth.employee.id,
+      platform: auth.platform,
+      module: 'printer',
+      action: 'delete_device',
+      entityId: id,
+      beforeData: {
+        device_name: existing.device_name,
+        host: existing.host,
+        mdns_host: existing.mdns_host,
+      },
+    });
+
+    await emitErpEvent(tx, 'erp:printer', 'device_deleted', {
+      device_id: id,
+      device_name: existing.device_name,
+    });
+
+    return existing;
+  });
+
+  if (!deleted) return c.json({ error: 'Perangkat printer tidak ditemukan.' }, 404);
+  return c.json({ ok: true, id });
+});
+
+printerRouter.post('/devices/:id/whatsapp', requirePermission('printer', 'update'), async (c) => {
+  const id = c.req.param('id') ?? '';
+  if (!UUID_RE.test(id)) return c.json({ error: 'ID perangkat printer tidak valid.' }, 400);
+
+  const auth = c.get('auth');
+  if (auth.platform !== 'web') {
+    return c.json({ error: 'Kontrol koneksi WhatsApp hanya tersedia melalui aplikasi web.' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  const parsed = deviceWhatsappActionSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+  const d = parsed.data;
+  const now = new Date();
+
+  const updated = await getDb().transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(print_devices)
+      .where(eq(print_devices.id, id))
+      .limit(1);
+    if (!existing) return null;
+
+    const payload = d.action === 'pair_link_code' && d.phone ? { phone: d.phone } : {};
+    const [device] = await tx
+      .update(print_devices)
+      .set({
+        pending_command: d.action,
+        pending_command_payload: payload,
+        pending_command_at: now,
+        last_command_result: null,
+        openwa_qr_code: null,
+        openwa_link_code: null,
+        openwa_qr_updated_at: null,
+        updated_at: now,
+      })
+      .where(eq(print_devices.id, id))
+      .returning();
+
+    await writeAuditLog(tx, {
+      actorId: auth.employee.id,
+      platform: auth.platform,
+      module: 'printer',
+      action: 'device_whatsapp_command',
+      entityId: id,
+      afterData: {
+        device_name: device.device_name,
+        command: d.action,
+      },
+    });
+
+    await emitErpEvent(tx, 'erp:printer', 'device_whatsapp_command', {
+      device_id: id,
+      command: d.action,
+    });
+
+    return device;
+  });
+
+  if (!updated) return c.json({ error: 'Perangkat printer tidak ditemukan.' }, 404);
+  return c.json({
+    device: sanitizeDeviceForClient(updated, { includePairing: true }),
+    queued_command: d.action,
   });
 });
 
@@ -1436,8 +1630,47 @@ agentRouter.post('/heartbeat', async (c) => {
   return c.json({
     ok: true,
     device: sanitizeDeviceForClient(updated),
+    config: {
+      dry_run_mode: updated.dry_run_mode,
+      host: updated.host,
+    },
+    pending_command: updated.pending_command
+      ? {
+          command: updated.pending_command,
+          payload: updated.pending_command_payload ?? {},
+          requested_at: updated.pending_command_at ? updated.pending_command_at.toISOString() : null,
+        }
+      : null,
     server_time: now.toISOString(),
   });
+});
+
+agentRouter.post('/command/ack', async (c) => {
+  const device = c.get('printDevice')!;
+  const body = await c.req.json().catch(() => null);
+  const parsed = printAgentCommandAckSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+  const d = parsed.data;
+  const now = new Date();
+  await getDb()
+    .update(print_devices)
+    .set({
+      pending_command: null,
+      pending_command_payload: {},
+      pending_command_at: null,
+      last_command_result: d.message || (d.ok ? 'Perintah selesai.' : 'Perintah gagal.'),
+      updated_at: now,
+    })
+    .where(and(eq(print_devices.id, device.id), eq(print_devices.pending_command, d.command)));
+
+  await emitErpEvent(getDb(), 'erp:printer', 'device_command_acked', {
+    device_id: device.id,
+    command: d.command,
+    ok: d.ok,
+  });
+
+  return c.json({ ok: true });
 });
 
 agentRouter.post('/jobs/presign-upload', async (c) => {

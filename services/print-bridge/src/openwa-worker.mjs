@@ -51,12 +51,14 @@ export function startOpenWaWorker({
   onStateChange = null,
   logger = console,
 }) {
+  const resolvedSessionPath = path.resolve(sessionPath);
   let status = 'qr_required';
   let currentQrCode = null;
   let currentLinkCode = null;
   let client = null;
   let activeBootClient = null;
   let stopped = false;
+  let bootGen = 0;
 
   const notifyStateChange = () => {
     if (typeof onStateChange === 'function') {
@@ -68,7 +70,34 @@ export function startOpenWaWorker({
     }
   };
 
-  (async () => {
+  async function stopSession({ clearSession = false } = {}) {
+    bootGen += 1;
+    const target = client || activeBootClient;
+    client = null;
+    activeBootClient = null;
+    currentQrCode = null;
+    currentLinkCode = null;
+
+    if (target && typeof target.stop === 'function') {
+      await target.stop('bridge_reconfigure').catch(() => {});
+    }
+
+    if (clearSession) {
+      await fs.rm(resolvedSessionPath, { recursive: true, force: true }).catch(() => {});
+      await fs.mkdir(resolvedSessionPath, { recursive: true }).catch(() => {});
+    }
+  }
+
+  async function bootSession({ clearSession = false, nextLinkCode = linkCode } = {}) {
+    await stopSession({ clearSession });
+    if (stopped) return;
+
+    const myGen = bootGen;
+    status = 'qr_required';
+    currentQrCode = null;
+    currentLinkCode = null;
+    notifyStateChange();
+
     let coreMod;
     let clientMod;
     let driverMod;
@@ -83,6 +112,7 @@ export function startOpenWaWorker({
       const qrMod = await import('qrcode-terminal');
       qrcodeTerminal = qrMod.default || qrMod;
     } catch (err) {
+      if (myGen !== bootGen) return;
       status = 'disconnected';
       currentQrCode = null;
       currentLinkCode = null;
@@ -94,7 +124,12 @@ export function startOpenWaWorker({
     const createClient = coreMod.createClient || coreMod.default?.createClient;
     const Client = clientMod.Client || clientMod.default?.Client;
     const PuppeteerDriver = driverMod.PuppeteerDriver || driverMod.default?.PuppeteerDriver;
-    if (typeof createClient !== 'function' || typeof Client !== 'function' || typeof PuppeteerDriver !== 'function') {
+    if (
+      typeof createClient !== 'function' ||
+      typeof Client !== 'function' ||
+      typeof PuppeteerDriver !== 'function'
+    ) {
+      if (myGen !== bootGen) return;
       status = 'disconnected';
       currentQrCode = null;
       currentLinkCode = null;
@@ -104,10 +139,9 @@ export function startOpenWaWorker({
     }
 
     try {
-      const resolvedSessionPath = path.resolve(sessionPath);
       await fs.mkdir(resolvedSessionPath, { recursive: true });
       const executablePath = await resolveChromeExe(chromePath);
-      const cleanLinkCode = String(linkCode || '').replace(/[^\d]/g, '');
+      const cleanLinkCode = String(nextLinkCode || '').replace(/[^\d]/g, '');
 
       const core = await createClient({
         driver: new PuppeteerDriver(),
@@ -128,6 +162,10 @@ export function startOpenWaWorker({
         ...(cleanLinkCode ? { linkCode: cleanLinkCode } : {}),
       });
 
+      if (stopped || myGen !== bootGen) {
+        return;
+      }
+
       const waClient = new Client({
         client: core,
         transport: core.getTransport(),
@@ -136,6 +174,7 @@ export function startOpenWaWorker({
 
       let lastQrRendered = '';
       waClient.events.on('launch.auth.qr.generated', (evt) => {
+        if (myGen !== bootGen) return;
         const qrData = evt?.details?.qr;
         if (qrData && typeof qrData === 'string' && !qrData.startsWith('data:image/')) {
           status = 'qr_required';
@@ -144,13 +183,16 @@ export function startOpenWaWorker({
           notifyStateChange();
           if (qrData !== lastQrRendered) {
             lastQrRendered = qrData;
-            logger.log('[openwa] QR Code siap. Pindai dari https://my.ekalliptus.com/printer atau terminal ini:');
+            logger.log(
+              '[openwa] QR Code siap. Pindai dari https://my.ekalliptus.com/printer atau terminal ini:',
+            );
             qrcodeTerminal.generate(qrData, { small: true });
           }
         }
       });
 
       waClient.events.on('launch.auth.linkCode.generated', (evt) => {
+        if (myGen !== bootGen) return;
         const code = evt?.details?.linkCode;
         if (code) {
           status = 'qr_required';
@@ -158,25 +200,29 @@ export function startOpenWaWorker({
           currentQrCode = null;
           notifyStateChange();
           logger.log(
-            `[openwa] Masukkan kode pairing 8 digit ini di WhatsApp HP (Perangkat Tertaut -> Tautkan dengan nomor telepon) atau lihat di https://my.ekalliptus.com/printer: ${code}`,
+            `[openwa] Kode pairing 8 digit tersedia di https://my.ekalliptus.com/printer: ${code}`,
           );
         }
       });
 
       waClient.events.on('launch.auth.qr.expired', () => {
+        if (myGen !== bootGen) return;
         currentQrCode = null;
         notifyStateChange();
       });
 
       waClient.events.on('launch.auth.qr.scanned', () => {
+        if (myGen !== bootGen) return;
         logger.log('[openwa] QR Code terpindai, sedang menghubungkan perangkat...');
       });
 
       waClient.events.on('launch.auth.pairing', () => {
+        if (myGen !== bootGen) return;
         logger.log('[openwa] Sedang menyinkronkan sesi WhatsApp...');
       });
 
       waClient.events.on('auth.logout', () => {
+        if (myGen !== bootGen) return;
         status = 'qr_required';
         currentQrCode = null;
         currentLinkCode = null;
@@ -186,7 +232,7 @@ export function startOpenWaWorker({
 
       await waClient.start();
 
-      if (stopped) {
+      if (stopped || myGen !== bootGen) {
         await waClient.stop('bridge_shutdown').catch(() => {});
         return;
       }
@@ -199,6 +245,7 @@ export function startOpenWaWorker({
       logger.log(`[openwa] Terhubung (session: ${sessionId})`);
 
       waClient.onStateChanged((state) => {
+        if (myGen !== bootGen) return;
         const normalized = String(state || '').toUpperCase();
         if (normalized === 'CONNECTED' || normalized === 'READY') {
           status = 'connected';
@@ -220,6 +267,7 @@ export function startOpenWaWorker({
       });
 
       waClient.onMessage(async (message) => {
+        if (myGen !== bootGen) return;
         try {
           const decision = classifyIncomingMessage(message);
           if (decision.action === 'ignore') {
@@ -284,13 +332,16 @@ export function startOpenWaWorker({
         }
       });
     } catch (err) {
+      if (myGen !== bootGen) return;
       status = 'disconnected';
       currentQrCode = null;
       currentLinkCode = null;
       notifyStateChange();
       logger.error('[openwa] Gagal inisialisasi sesi WhatsApp:', err?.message || err);
     }
-  })().catch((err) => {
+  }
+
+  bootSession().catch((err) => {
     status = 'disconnected';
     currentQrCode = null;
     currentLinkCode = null;
@@ -301,6 +352,15 @@ export function startOpenWaWorker({
   return {
     getStatus: () => status,
     getPairingState: () => ({ qrCode: currentQrCode, linkCode: currentLinkCode }),
+    reconnect: async ({ clearSession = false, linkCode: nextLinkCode = '' } = {}) => {
+      if (stopped) return;
+      await bootSession({ clearSession, nextLinkCode });
+    },
+    disconnect: async ({ clearSession = true } = {}) => {
+      await stopSession({ clearSession });
+      status = 'disconnected';
+      notifyStateChange();
+    },
     sendText: async (chatId, text) => {
       if (!client || status !== 'connected') {
         return false;
@@ -310,14 +370,7 @@ export function startOpenWaWorker({
     },
     close: async () => {
       stopped = true;
-      const target = client || activeBootClient;
-      try {
-        if (target && typeof target.stop === 'function') {
-          await target.stop('bridge_shutdown');
-        }
-      } catch {
-        // Ignore shutdown errors
-      }
+      await stopSession({ clearSession: false });
     },
   };
 }

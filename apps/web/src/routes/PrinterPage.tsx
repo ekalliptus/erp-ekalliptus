@@ -19,6 +19,8 @@ import {
   ExternalLink,
   FileText,
   KeyRound,
+  MessageSquare,
+  Pencil,
   Plus,
   Printer,
   QrCode,
@@ -150,6 +152,9 @@ export function PrinterPage({ me }: { me: MeResponse }) {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [deviceModalOpen, setDeviceModalOpen] = useState(false);
+  const [editingDevice, setEditingDevice] = useState<PrintDeviceRow | null>(null);
+  const [waDeviceId, setWaDeviceId] = useState<string | null>(null);
+  const [deletingDevice, setDeletingDevice] = useState<PrintDeviceRow | null>(null);
   const [qrPanelExpanded, setQrPanelExpanded] = useState(true);
   const [linkCodeCopied, setLinkCodeCopied] = useState(false);
   const [revealedToken, setRevealedToken] = useState<{
@@ -168,8 +173,10 @@ export function PrinterPage({ me }: { me: MeResponse }) {
     enabled: canView,
     refetchInterval: (query) => {
       const list = query.state.data?.devices ?? [];
-      const needsQr = list.some((d) => d.is_online && d.openwa_status === 'qr_required');
-      return needsQr ? 3_000 : 15_000;
+      const activePairingOrCmd = list.some(
+        (d) => Boolean(d.pending_command) || (d.is_online && d.openwa_status === 'qr_required'),
+      );
+      return activePairingOrCmd ? 3_000 : 10_000;
     },
   });
 
@@ -225,6 +232,24 @@ export function PrinterPage({ me }: { me: MeResponse }) {
     void qc.invalidateQueries({ queryKey: ['printer'] });
     void qc.invalidateQueries({ queryKey: ['me'] });
   };
+
+  const deleteDeviceMut = useMutation({
+    mutationFn: (id: string) => erpApi.printer.deleteDevice(id),
+    onSuccess: (_res, id) => {
+      const targetName = deletingDevice?.device_name || 'Perangkat';
+      setDeletingDevice(null);
+      if (waDeviceId === id) setWaDeviceId(null);
+      if (editingDevice?.id === id) setEditingDevice(null);
+      setBannerNotice({ kind: 'success', text: `Perangkat "${targetName}" dihapus permanen.` });
+      invalidatePrinter();
+    },
+    onError: (err) => {
+      setBannerNotice({
+        kind: 'error',
+        text: err instanceof Error ? err.message : 'Gagal menghapus perangkat bridge.',
+      });
+    },
+  });
 
   if (!canView) {
     return (
@@ -334,6 +359,23 @@ export function PrinterPage({ me }: { me: MeResponse }) {
                           : 'OpenWA Terputus'
                     }
                   />
+                  {primaryDevice.dry_run_mode ? (
+                    <StatusBadge tone="info" label="Mode Uji (Dry-Run)" />
+                  ) : null}
+                  {canPairWhatsapp ? (
+                    <button
+                      type="button"
+                      onClick={() => setWaDeviceId(primaryDevice.id)}
+                      className="inline-flex min-h-[28px] cursor-pointer items-center gap-1 rounded-md border border-border-strong bg-canvas px-2.5 text-[11px] font-semibold text-text-primary hover:border-accent"
+                    >
+                      <MessageSquare className="h-3 w-3 text-accent" aria-hidden="true" />
+                      <span>
+                        {primaryDevice.openwa_status === 'connected'
+                          ? 'Kelola WhatsApp'
+                          : 'Sambungkan WhatsApp'}
+                      </span>
+                    </button>
+                  ) : null}
                 </div>
                 <p className="text-xs text-text-secondary">
                   {primaryDevice.model} | Host:{' '}
@@ -724,11 +766,11 @@ export function PrinterPage({ me }: { me: MeResponse }) {
           devices={devices}
           canCreate={canCreate}
           canUpdate={canUpdate}
+          canDelete={canDelete}
           onOpenRegister={() => setDeviceModalOpen(true)}
-          onOpenQrPairing={() => {
-            setQrPanelExpanded(true);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
+          onOpenWhatsapp={(dev) => setWaDeviceId(dev.id)}
+          onEditDevice={(dev) => setEditingDevice(dev)}
+          onDeleteDevice={(dev) => setDeletingDevice(dev)}
           onTokenRotated={(name, token) => {
             setTokenCopied(false);
             setRevealedToken({ deviceName: name, token });
@@ -820,6 +862,95 @@ export function PrinterPage({ me }: { me: MeResponse }) {
           onError={(err) => setBannerNotice({ kind: 'error', text: err })}
         />
       </SlideOver>
+
+      {/* Edit Bridge Device SlideOver */}
+      <SlideOver
+        open={Boolean(editingDevice)}
+        onClose={() => setEditingDevice(null)}
+        title={editingDevice ? `Edit ${editingDevice.device_name}` : 'Edit Perangkat Bridge'}
+        subtitle="Ubah nama, IP printer Wi-Fi, mDNS, status aktif, atau mode uji tanpa kertas."
+      >
+        {editingDevice ? (
+          <EditDeviceForm
+            key={editingDevice.id}
+            device={editingDevice}
+            onSaved={(dev) => {
+              setEditingDevice(null);
+              setBannerNotice({
+                kind: 'success',
+                text: `Pengaturan perangkat "${dev.device_name}" diperbarui.`,
+              });
+              invalidatePrinter();
+            }}
+            onError={(err) => setBannerNotice({ kind: 'error', text: err })}
+          />
+        ) : null}
+      </SlideOver>
+
+      {/* Web-Only WhatsApp Control & QR SlideOver */}
+      <SlideOver
+        open={Boolean(waDeviceId)}
+        onClose={() => setWaDeviceId(null)}
+        title="Kelola Koneksi WhatsApp Bridge"
+        subtitle="Pindai QR, pakai kode 8 digit, reset sesi, atau logout WhatsApp langsung dari web."
+      >
+        {waDeviceId ? (
+          <WhatsappControlPanel
+            device={devices.find((d) => d.id === waDeviceId) ?? null}
+            onRefresh={() => void devicesQuery.refetch()}
+            onQueued={(msg) => {
+              setBannerNotice({ kind: 'success', text: msg });
+              invalidatePrinter();
+            }}
+            onError={(err) => setBannerNotice({ kind: 'error', text: err })}
+          />
+        ) : null}
+      </SlideOver>
+
+      {/* Delete Device Confirmation Modal */}
+      {deletingDevice ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="fixed inset-0 bg-black/50"
+            aria-hidden="true"
+            onClick={() => !deleteDeviceMut.isPending && setDeletingDevice(null)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Konfirmasi hapus perangkat bridge"
+            className="relative z-10 w-full max-w-md space-y-4 rounded-xl border border-border-strong bg-surface p-5 text-text-primary shadow-xl"
+          >
+            <div className="space-y-1">
+              <h3 className="font-display text-base font-bold">
+                Hapus Perangkat "{deletingDevice.device_name}"?
+              </h3>
+              <p className="text-xs text-text-secondary">
+                Token bridge perangkat ini akan dicabut permanen sehingga laptop/PC terkait tidak bisa
+                lagi terhubung. Riwayat print job dan transaksi keuangan tetap aman tersimpan.
+              </p>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                disabled={deleteDeviceMut.isPending}
+                onClick={() => setDeletingDevice(null)}
+                className="min-h-[38px] cursor-pointer rounded-md border border-border-strong bg-surface px-3.5 text-xs font-semibold text-text-primary disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={deleteDeviceMut.isPending}
+                onClick={() => deleteDeviceMut.mutate(deletingDevice.id)}
+                className="min-h-[38px] cursor-pointer rounded-md bg-[#991B1B] px-3.5 text-xs font-semibold text-white hover:bg-[#7F1D1D] disabled:opacity-50"
+              >
+                {deleteDeviceMut.isPending ? 'Menghapus...' : 'Ya, Hapus Perangkat'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* One-time Token Modal */}
       {revealedToken ? (
@@ -1026,16 +1157,22 @@ function DevicesSection({
   devices,
   canCreate,
   canUpdate,
+  canDelete,
   onOpenRegister,
-  onOpenQrPairing,
+  onOpenWhatsapp,
+  onEditDevice,
+  onDeleteDevice,
   onTokenRotated,
   onError,
 }: {
   devices: PrintDeviceRow[];
   canCreate: boolean;
   canUpdate: boolean;
+  canDelete: boolean;
   onOpenRegister: () => void;
-  onOpenQrPairing: () => void;
+  onOpenWhatsapp: (dev: PrintDeviceRow) => void;
+  onEditDevice: (dev: PrintDeviceRow) => void;
+  onDeleteDevice: (dev: PrintDeviceRow) => void;
   onTokenRotated: (deviceName: string, token: string) => void;
   onError: (msg: string) => void;
 }) {
@@ -1044,6 +1181,8 @@ function DevicesSection({
     onSuccess: (res) => onTokenRotated(res.device.device_name, res.agent_token),
     onError: (err) => onError(err instanceof Error ? err.message : 'Gagal memutar token.'),
   });
+
+  const canPairWhatsapp = canCreate || canUpdate;
 
   return (
     <div className="space-y-4">
@@ -1076,37 +1215,76 @@ function DevicesSection({
                   </p>
                   <p className="text-xs text-text-secondary">{dev.model}</p>
                 </div>
-                <StatusBadge
-                  tone={dev.is_online ? 'success' : 'danger'}
-                  label={dev.is_online ? 'Online' : 'Offline'}
-                />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {dev.dry_run_mode ? <StatusBadge tone="info" label="Dry-Run" /> : null}
+                  {!dev.is_active ? <StatusBadge tone="neutral" label="Nonaktif" /> : null}
+                  <StatusBadge
+                    tone={dev.is_online ? 'success' : 'danger'}
+                    label={dev.is_online ? 'Online' : 'Offline'}
+                  />
+                </div>
               </div>
               <div className="space-y-1 text-xs text-text-secondary">
                 <p>
-                  Host IP: <span className="font-mono text-text-primary">{dev.host || '-'}</span>
+                  Host IP: <span className="font-mono text-text-primary">{dev.host || '-'}</span> | mDNS:{' '}
+                  <span className="font-mono text-text-primary">{dev.mdns_host || '-'}</span>
                 </p>
                 <p>
                   Status Printer:{' '}
-                  <span className="font-mono text-text-primary">{dev.printer_state}</span>
+                  <span className="font-mono text-text-primary">{dev.printer_state}</span> | Mode:{' '}
+                  <span className="font-semibold text-text-primary">
+                    {dev.dry_run_mode ? 'Uji Tanpa Kertas' : 'Cetak Fisik'}
+                  </span>
                 </p>
                 <p>
-                  OpenWA: <span className="font-mono text-text-primary">{dev.openwa_status}</span>
+                  OpenWA:{' '}
+                  <span className="font-mono text-text-primary">{dev.openwa_status}</span>
+                  {dev.pending_command ? (
+                    <span className="ml-2 text-accent">
+                      (Perintah aktif: {dev.pending_command})
+                    </span>
+                  ) : null}
                 </p>
                 <p>
                   Heartbeat Terakhir:{' '}
                   {dev.last_heartbeat_at ? formatDateTimeId(dev.last_heartbeat_at) : 'Belum ada'}
                 </p>
+                {dev.last_command_result ? (
+                  <p className="text-[11px] text-text-primary">
+                    Info Bridge: {dev.last_command_result}
+                  </p>
+                ) : null}
               </div>
-              {canUpdate || canCreate ? (
+              {canPairWhatsapp || canUpdate || canDelete ? (
                 <div className="flex flex-wrap items-center gap-2 pt-1">
-                  {dev.is_online && dev.openwa_status === 'qr_required' ? (
+                  {canPairWhatsapp ? (
                     <button
                       type="button"
-                      onClick={onOpenQrPairing}
+                      onClick={() => onOpenWhatsapp(dev)}
                       className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-hover"
                     >
-                      <QrCode className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>Scan QR WhatsApp</span>
+                      {dev.openwa_status === 'qr_required' ? (
+                        <QrCode className="h-3.5 w-3.5" aria-hidden="true" />
+                      ) : (
+                        <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                      )}
+                      <span>
+                        {dev.openwa_status === 'qr_required'
+                          ? 'Scan QR WhatsApp'
+                          : dev.openwa_status === 'connected'
+                            ? 'Kelola WhatsApp'
+                            : 'Sambungkan WhatsApp'}
+                      </span>
+                    </button>
+                  ) : null}
+                  {canUpdate ? (
+                    <button
+                      type="button"
+                      onClick={() => onEditDevice(dev)}
+                      className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-md border border-border-strong bg-surface px-3 text-xs font-semibold text-text-primary hover:border-accent"
+                    >
+                      <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Edit</span>
                     </button>
                   ) : null}
                   {canUpdate ? (
@@ -1117,7 +1295,17 @@ function DevicesSection({
                       className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-md border border-border-strong bg-surface px-3 text-xs font-semibold text-text-primary hover:border-accent"
                     >
                       <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>Putar Agent Token</span>
+                      <span>Putar Token</span>
+                    </button>
+                  ) : null}
+                  {canDelete ? (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteDevice(dev)}
+                      className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-md border border-[#991B1B]/30 bg-surface px-3 text-xs font-semibold text-[#991B1B] hover:border-[#991B1B] dark:text-[#FCA5A5]"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Hapus</span>
                     </button>
                   ) : null}
                 </div>
@@ -1937,5 +2125,336 @@ function RegisterDeviceForm({
         {regMut.isPending ? 'Mendaftarkan...' : 'Buat Perangkat & Generate Token'}
       </button>
     </form>
+  );
+}
+
+function EditDeviceForm({
+  device,
+  onSaved,
+  onError,
+}: {
+  device: PrintDeviceRow;
+  onSaved: (dev: PrintDeviceRow) => void;
+  onError: (msg: string) => void;
+}) {
+  const [deviceName, setDeviceName] = useState(device.device_name);
+  const [host, setHost] = useState(device.host ?? '');
+  const [mdnsHost, setMdnsHost] = useState(device.mdns_host ?? '');
+  const [model, setModel] = useState(device.model || 'HP Smart Tank 580-590 series');
+  const [dryRunMode, setDryRunMode] = useState(Boolean(device.dry_run_mode));
+  const [isActive, setIsActive] = useState(Boolean(device.is_active));
+
+  const saveMut = useMutation({
+    mutationFn: () =>
+      erpApi.printer.updateDevice(device.id, {
+        device_name: deviceName.trim(),
+        host: host.trim() || null,
+        mdns_host: mdnsHost.trim() || null,
+        model: model.trim() || 'HP Smart Tank 580-590 series',
+        dry_run_mode: dryRunMode,
+        is_active: isActive,
+      }),
+    onSuccess: (res) => onSaved(res.device),
+    onError: (err) => onError(err instanceof Error ? err.message : 'Gagal memperbarui perangkat.'),
+  });
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        saveMut.mutate();
+      }}
+      className="space-y-4 text-xs"
+    >
+      <label className="block space-y-1">
+        <span className="block font-semibold text-text-primary">Nama Perangkat Bridge *</span>
+        <input
+          type="text"
+          required
+          minLength={2}
+          value={deviceName}
+          onChange={(e) => setDeviceName(e.target.value)}
+          className="h-10 w-full rounded-md border border-border bg-canvas px-3 text-text-primary"
+        />
+      </label>
+      <label className="block space-y-1">
+        <span className="block font-semibold text-text-primary">Model Printer</span>
+        <input
+          type="text"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          className="h-10 w-full rounded-md border border-border bg-canvas px-3 text-text-primary"
+        />
+      </label>
+      <label className="block space-y-1">
+        <span className="block font-semibold text-text-primary">IP Printer Wi-Fi</span>
+        <input
+          type="text"
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+          placeholder="192.168.0.5"
+          className="h-10 w-full rounded-md border border-border bg-canvas px-3 font-mono text-text-primary"
+        />
+      </label>
+      <label className="block space-y-1">
+        <span className="block font-semibold text-text-primary">Hostname mDNS</span>
+        <input
+          type="text"
+          value={mdnsHost}
+          onChange={(e) => setMdnsHost(e.target.value)}
+          placeholder="HP48EA6283D5C2.local"
+          className="h-10 w-full rounded-md border border-border bg-canvas px-3 font-mono text-text-primary"
+        />
+      </label>
+      <div className="space-y-2.5 rounded-lg border border-border bg-canvas p-3">
+        <label className="flex cursor-pointer items-center gap-2 text-text-primary">
+          <input
+            type="checkbox"
+            checked={dryRunMode}
+            onChange={(e) => setDryRunMode(e.target.checked)}
+            className="h-4 w-4 accent-accent"
+          />
+          <span>Mode Uji Tanpa Kertas (Dry-Run via IPP Validate-Job saja)</span>
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 text-text-primary">
+          <input
+            type="checkbox"
+            checked={isActive}
+            onChange={(e) => setIsActive(e.target.checked)}
+            className="h-4 w-4 accent-accent"
+          />
+          <span>Perangkat Aktif (izinkan bridge mengirim heartbeat &amp; menerima job)</span>
+        </label>
+      </div>
+      <button
+        type="submit"
+        disabled={saveMut.isPending}
+        className="min-h-[42px] w-full cursor-pointer rounded-md bg-accent px-4 text-xs font-semibold text-on-accent hover:bg-accent-hover disabled:opacity-50"
+      >
+        {saveMut.isPending ? 'Menyimpan...' : 'Simpan Pengaturan Perangkat'}
+      </button>
+    </form>
+  );
+}
+
+function WhatsappControlPanel({
+  device,
+  onRefresh,
+  onQueued,
+  onError,
+}: {
+  device: PrintDeviceRow | null;
+  onRefresh: () => void;
+  onQueued: (msg: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const [phoneInput, setPhoneInput] = useState('');
+  const [codeCopied, setCodeCopied] = useState(false);
+
+  const actionMut = useMutation({
+    mutationFn: (payload: {
+      action: 'connect_qr' | 'reset_qr' | 'pair_link_code' | 'logout_wa';
+      phone?: string | null;
+    }) => {
+      if (!device) throw new Error('Perangkat bridge tidak ditemukan.');
+      return erpApi.printer.whatsappAction(device.id, payload);
+    },
+    onSuccess: (res) => {
+      onQueued(`Perintah "${res.queued_command}" dikirim ke bridge. Tunggu beberapa detik.`);
+      onRefresh();
+    },
+    onError: (err) => {
+      onError(err instanceof Error ? err.message : 'Gagal mengirim perintah WhatsApp.');
+    },
+  });
+
+  if (!device) {
+    return <ErrorState message="Perangkat bridge tidak ditemukan." />;
+  }
+
+  return (
+    <div className="space-y-4 text-xs">
+      {/* Device Live State */}
+      <div className="space-y-2 rounded-lg border border-border bg-canvas p-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="font-display text-sm font-bold text-text-primary">{device.device_name}</p>
+            <p className="text-[11px] text-text-secondary">Host: {device.host || '-'}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StatusBadge
+              tone={device.is_online ? 'success' : 'danger'}
+              label={device.is_online ? 'Bridge Online' : 'Bridge Offline'}
+            />
+            <StatusBadge
+              tone={
+                device.openwa_status === 'connected'
+                  ? 'success'
+                  : device.openwa_status === 'qr_required'
+                    ? 'warning'
+                    : 'neutral'
+              }
+              label={
+                device.openwa_status === 'connected'
+                  ? 'OpenWA Terhubung'
+                  : device.openwa_status === 'qr_required'
+                    ? 'Perlu Scan QR'
+                    : 'Terputus'
+              }
+            />
+          </div>
+        </div>
+        {device.pending_command ? (
+          <p className="font-medium text-accent">
+            Sedang memproses perintah "{device.pending_command}" di PC toko...
+          </p>
+        ) : null}
+        {device.last_command_result ? (
+          <p className="text-text-secondary">Info terakhir: {device.last_command_result}</p>
+        ) : null}
+      </div>
+
+      {!device.is_online ? (
+        <div className="space-y-2 rounded-lg border border-border bg-surface-subtle/60 p-3.5">
+          <p className="font-semibold text-text-primary">
+            Layanan latar belakang di PC toko sedang tidak aktif
+          </p>
+          <p className="text-text-secondary">
+            Perintah dari web akan otomatis dijalankan begitu layanan bridge di PC toko menyala.
+            Untuk PC baru, jalankan sekali installer layanan senyap tanpa terminal:
+          </p>
+          <code className="block rounded border border-border bg-canvas px-2.5 py-2 font-mono text-[11px] text-text-primary">
+            cd services\print-bridge &amp;&amp; npm run service:install
+          </code>
+        </div>
+      ) : null}
+
+      {/* QR Pairing Section */}
+      <div className="space-y-3 rounded-lg border border-border bg-canvas p-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="font-semibold text-text-primary">Tautkan dengan QR Code</p>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="inline-flex min-h-[32px] cursor-pointer items-center gap-1 rounded border border-border-strong bg-surface px-2.5 text-[11px] font-semibold text-text-primary hover:border-accent"
+          >
+            <RefreshCw className="h-3 w-3" aria-hidden="true" />
+            <span>Segarkan</span>
+          </button>
+        </div>
+
+        {device.is_online && device.openwa_qr_code ? (
+          <div className="flex flex-col items-center gap-3 py-1">
+            <QrCodeCanvas
+              value={device.openwa_qr_code}
+              size={220}
+              label={`QR Code WhatsApp ${device.device_name}`}
+            />
+            <p className="text-center text-[11px] text-text-secondary">
+              Buka WhatsApp di HP toko -&gt; Perangkat Tertaut -&gt; Tautkan Perangkat, lalu pindai QR di atas.
+            </p>
+          </div>
+        ) : device.openwa_status === 'connected' ? (
+          <p className="text-text-secondary">
+            WhatsApp sudah terhubung dan siap menerima dokumen cetak dari chat pribadi.
+          </p>
+        ) : (
+          <p className="text-text-secondary">
+            Klik tombol di bawah untuk memulai sesi OpenWA dan memunculkan QR Code langsung di layar ini.
+          </p>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={actionMut.isPending}
+            onClick={() => actionMut.mutate({ action: 'connect_qr' })}
+            className="inline-flex min-h-[38px] flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-hover disabled:opacity-50"
+          >
+            <QrCode className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Sambungkan / Tampilkan QR</span>
+          </button>
+          <button
+            type="button"
+            disabled={actionMut.isPending}
+            onClick={() => actionMut.mutate({ action: 'reset_qr' })}
+            className="inline-flex min-h-[38px] cursor-pointer items-center gap-1.5 rounded-md border border-border-strong bg-surface px-3 text-xs font-semibold text-text-primary hover:border-accent disabled:opacity-50"
+          >
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Reset Sesi &amp; QR Baru</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 8-Digit Phone Linking Code Section */}
+      <div className="space-y-3 rounded-lg border border-border bg-canvas p-3.5">
+        <p className="font-semibold text-text-primary">Atau Tautkan via Kode 8 Digit (Tanpa Kamera)</p>
+        {device.is_online && device.openwa_link_code ? (
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="rounded-lg border border-border bg-surface px-3.5 py-2 font-mono text-xl font-bold tracking-widest text-text-primary">
+              {device.openwa_link_code}
+            </span>
+            <button
+              type="button"
+              onClick={async () => {
+                await navigator.clipboard.writeText(device.openwa_link_code ?? '');
+                setCodeCopied(true);
+                setTimeout(() => setCodeCopied(false), 2000);
+              }}
+              className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-md border border-border-strong bg-surface px-3 text-xs font-semibold text-text-primary hover:border-accent"
+            >
+              {codeCopied ? (
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              <span>{codeCopied ? 'Tersalin' : 'Salin'}</span>
+            </button>
+          </div>
+        ) : null}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            actionMut.mutate({ action: 'pair_link_code', phone: phoneInput });
+          }}
+          className="flex flex-wrap gap-2"
+        >
+          <input
+            type="tel"
+            required
+            value={phoneInput}
+            onChange={(e) => setPhoneInput(e.target.value)}
+            placeholder="Nomor WA format 628xxxxxxxxxx"
+            className="h-10 min-w-[190px] flex-1 rounded-md border border-border bg-surface px-3 font-mono text-text-primary"
+          />
+          <button
+            type="submit"
+            disabled={actionMut.isPending}
+            className="min-h-[40px] cursor-pointer rounded-md border border-border-strong bg-surface px-3.5 text-xs font-semibold text-text-primary hover:border-accent disabled:opacity-50"
+          >
+            Buat Kode 8 Digit
+          </button>
+        </form>
+      </div>
+
+      {/* Disconnect / Logout Session */}
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-canvas p-3.5">
+        <div>
+          <p className="font-semibold text-text-primary">Putuskan / Ganti Akun WhatsApp</p>
+          <p className="text-[11px] text-text-secondary">
+            Menghapus sesi lokal OpenWA di PC toko dan menghentikan koneksi WhatsApp aktif.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={actionMut.isPending}
+          onClick={() => actionMut.mutate({ action: 'logout_wa' })}
+          className="inline-flex min-h-[36px] shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-[#991B1B]/30 bg-surface px-3 text-xs font-semibold text-[#991B1B] hover:border-[#991B1B] disabled:opacity-50 dark:text-[#FCA5A5]"
+        >
+          <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
+          <span>Logout WA</span>
+        </button>
+      </div>
+    </div>
   );
 }

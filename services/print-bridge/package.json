@@ -7,6 +7,8 @@
     "start": "node src/index.mjs",
     "dry-run": "node src/index.mjs --dry-run",
     "verify-printer": "node src/index.mjs --verify-printer",
+    "service:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows-autostart.ps1",
+    "service:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/uninstall-windows-autostart.ps1",
     "test": "node --test test/bridge.test.mjs"
   },
   "dependencies": {

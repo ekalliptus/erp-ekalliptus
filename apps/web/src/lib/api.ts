@@ -975,6 +975,10 @@ export interface PrintDeviceRow {
   openwa_qr_code?: string | null;
   openwa_link_code?: string | null;
   openwa_qr_updated_at?: string | null;
+  dry_run_mode?: boolean;
+  pending_command?: string | null;
+  pending_command_at?: string | null;
+  last_command_result?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1567,6 +1571,39 @@ export const erpApi = {
       apiFetch<{ device: PrintDeviceRow; agent_token: string }>(
         `/api/print/devices/${id}/rotate-token`,
         { method: 'POST' },
+      ),
+    updateDevice: (
+      id: string,
+      body: {
+        device_name?: string;
+        host?: string | null;
+        mdns_host?: string | null;
+        model?: string;
+        is_active?: boolean;
+        dry_run_mode?: boolean;
+      },
+    ) =>
+      apiFetch<{ device: PrintDeviceRow }>(`/api/print/devices/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    deleteDevice: (id: string) =>
+      apiFetch<{ ok: boolean; id: string }>(`/api/print/devices/${id}`, {
+        method: 'DELETE',
+      }),
+    whatsappAction: (
+      id: string,
+      body: {
+        action: 'connect_qr' | 'reset_qr' | 'pair_link_code' | 'logout_wa';
+        phone?: string | null;
+      },
+    ) =>
+      apiFetch<{ device: PrintDeviceRow; queued_command: string }>(
+        `/api/print/devices/${id}/whatsapp`,
+        {
+          method: 'POST',
+          body: JSON.stringify(body),
+        },
       ),
     pricing: () => apiFetch<{ pricing_rules: PrintPricingRuleRow[] }>('/api/print/pricing'),
     upsertPricing: (body: {
