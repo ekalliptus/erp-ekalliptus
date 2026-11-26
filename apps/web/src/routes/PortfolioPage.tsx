@@ -846,13 +846,10 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     }
 
     const cleanPriceDigits = priceAmount.replace(/\D/g, '');
-    if (priceType !== 'negotiable' && (!cleanPriceDigits || BigInt(cleanPriceDigits) <= 0n)) {
-      setFormError('Isi nominal harga project (lebih dari 0), atau pilih Tanpa Harga (Sembunyikan).');
-      return;
-    }
-
     const cleanOriginalDigits = originalPriceAmount.replace(/\D/g, '');
-    const isHiddenPrice = priceType === 'negotiable';
+    const hasPositivePrice = Boolean(cleanPriceDigits) && BigInt(cleanPriceDigits) > 0n;
+    const effectivePriceType: PortfolioPriceType =
+      hasPositivePrice && priceType !== 'negotiable' ? priceType : 'negotiable';
     const cleanSort = Number.parseInt(sortOrder, 10);
 
     const techStack = techStackText
@@ -883,9 +880,12 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
       category,
       offer_type: offerType,
       availability_status: availabilityStatus,
-      price_type: priceType,
-      price_amount: isHiddenPrice ? null : cleanPriceDigits ? cleanPriceDigits : null,
-      original_price_amount: isHiddenPrice ? null : cleanOriginalDigits ? cleanOriginalDigits : null,
+      price_type: effectivePriceType,
+      price_amount: hasPositivePrice && effectivePriceType !== 'negotiable' ? cleanPriceDigits : null,
+      original_price_amount:
+        hasPositivePrice && effectivePriceType !== 'negotiable' && cleanOriginalDigits
+          ? cleanOriginalDigits
+          : null,
       client_name: clientName.trim() || null,
       delivery_estimate: deliveryEstimate.trim() || null,
       demo_url: demoUrl.trim() || null,
@@ -1623,7 +1623,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <label htmlFor={`${baseId}-price`} className="block text-xs font-semibold text-text-primary">
-                  Harga Tayang (IDR) *
+                  Harga Tayang (IDR) (Opsional)
                 </label>
                 <input
                   id={`${baseId}-price`}

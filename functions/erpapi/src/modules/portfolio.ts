@@ -199,6 +199,19 @@ adminRouter.post('/', requirePermission('portfolio', 'create'), async (c) => {
 
   const auth = c.get('auth');
   const db = getDb();
+  const rawPrice = parsed.data.price_amount ?? null;
+  const hasPositivePrice = rawPrice !== null && rawPrice > 0n;
+  const normalizedPriceType =
+    hasPositivePrice && parsed.data.price_type !== 'negotiable'
+      ? parsed.data.price_type
+      : 'negotiable';
+  const normalizedPriceAmount =
+    hasPositivePrice && normalizedPriceType !== 'negotiable' ? rawPrice : null;
+  const normalizedOriginalAmount =
+    hasPositivePrice && normalizedPriceType !== 'negotiable'
+      ? parsed.data.original_price_amount ?? null
+      : null;
+
   let created: PortfolioRow;
   try {
     created = await db.transaction(async (tx) => {
@@ -212,9 +225,9 @@ adminRouter.post('/', requirePermission('portfolio', 'create'), async (c) => {
           category: parsed.data.category,
           offer_type: parsed.data.offer_type,
           availability_status: parsed.data.availability_status,
-          price_type: parsed.data.price_type,
-          price_amount: parsed.data.price_amount ?? null,
-          original_price_amount: parsed.data.original_price_amount ?? null,
+          price_type: normalizedPriceType,
+          price_amount: normalizedPriceAmount,
+          original_price_amount: normalizedOriginalAmount,
           client_name: parsed.data.client_name ?? null,
           delivery_estimate: parsed.data.delivery_estimate ?? null,
           demo_url: parsed.data.demo_url ?? null,
@@ -430,12 +443,14 @@ adminRouter.patch('/:id', requirePermission('portfolio', 'update'), async (c) =>
     .limit(1);
   if (!target) return c.json({ error: 'Project portofolio tidak ditemukan.' }, 404);
 
-  const nextPriceType = parsed.data.price_type ?? target.price_type;
-  const nextPriceAmount =
+  const nextPriceTypeRaw = parsed.data.price_type ?? target.price_type;
+  const nextPriceAmountRaw =
     parsed.data.price_amount !== undefined ? parsed.data.price_amount : target.price_amount;
-  if (nextPriceType !== 'negotiable' && (nextPriceAmount === null || nextPriceAmount <= 0n)) {
-    return c.json({ error: 'Harga project wajib lebih dari 0 untuk tipe harga ini.' }, 400);
-  }
+  const hasPositivePrice = nextPriceAmountRaw !== null && nextPriceAmountRaw > 0n;
+  const normalizedPriceType =
+    hasPositivePrice && nextPriceTypeRaw !== 'negotiable' ? nextPriceTypeRaw : 'negotiable';
+  const normalizedPriceAmount =
+    hasPositivePrice && normalizedPriceType !== 'negotiable' ? nextPriceAmountRaw : null;
 
   const nextPublished = parsed.data.is_published ?? target.is_published;
   const publishedAt = nextPublished ? target.published_at ?? new Date() : null;
@@ -458,12 +473,15 @@ adminRouter.patch('/:id', requirePermission('portfolio', 'update'), async (c) =>
       if (parsed.data.availability_status !== undefined) {
         patchValues.availability_status = parsed.data.availability_status;
       }
-      if (parsed.data.price_type !== undefined) patchValues.price_type = parsed.data.price_type;
-      if (parsed.data.price_amount !== undefined) {
-        patchValues.price_amount = parsed.data.price_amount;
-      }
       if (parsed.data.original_price_amount !== undefined) {
         patchValues.original_price_amount = parsed.data.original_price_amount;
+      }
+      if (parsed.data.price_type !== undefined || parsed.data.price_amount !== undefined) {
+        patchValues.price_type = normalizedPriceType;
+        patchValues.price_amount = normalizedPriceAmount;
+        if (!normalizedPriceAmount) {
+          patchValues.original_price_amount = null;
+        }
       }
       if (parsed.data.client_name !== undefined) patchValues.client_name = parsed.data.client_name;
       if (parsed.data.delivery_estimate !== undefined) {

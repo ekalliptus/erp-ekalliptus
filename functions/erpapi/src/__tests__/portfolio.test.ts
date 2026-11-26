@@ -91,7 +91,7 @@ describe('Storage authorization for portfolio prefix', () => {
 });
 
 describe('createPortfolioProjectSchema validation', () => {
-  it('rejects negative prices and fixed pricing without positive price_amount', () => {
+  it('rejects negative prices and allows empty/null price_amount as optional', () => {
     const neg = createPortfolioProjectSchema.safeParse({
       title: 'Web Toko',
       price_type: 'fixed',
@@ -99,12 +99,18 @@ describe('createPortfolioProjectSchema validation', () => {
     });
     assert.equal(neg.success, false);
 
-    const missingPrice = createPortfolioProjectSchema.safeParse({
+    const optionalPriceFixed = createPortfolioProjectSchema.safeParse({
       title: 'Web Toko',
       price_type: 'fixed',
       price_amount: null,
     });
-    assert.equal(missingPrice.success, false);
+    assert.equal(optionalPriceFixed.success, true);
+
+    const omittedPrice = createPortfolioProjectSchema.safeParse({
+      title: 'Web Toko',
+      price_type: 'starting_from',
+    });
+    assert.equal(omittedPrice.success, true);
 
     const unsafeDemo = createPortfolioProjectSchema.safeParse({
       title: 'Web Toko',

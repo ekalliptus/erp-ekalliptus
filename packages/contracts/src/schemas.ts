@@ -505,41 +505,14 @@ const portfolioFieldsShape = {
   sort_order: z.number().int().min(-999).max(9999).default(0),
 };
 
-export const createPortfolioProjectSchema = z
-  .object(portfolioFieldsShape)
-  .refine(
-    (data) => {
-      if (data.price_type !== 'negotiable') {
-        return (
-          data.price_amount !== null &&
-          data.price_amount !== undefined &&
-          data.price_amount > 0n
-        );
-      }
-      return true;
-    },
-    { message: 'Harga project wajib diisi lebih dari 0 untuk tipe harga ini.' },
-  );
+export const createPortfolioProjectSchema = z.object(portfolioFieldsShape);
 
 export const updatePortfolioProjectSchema = z
   .object(portfolioFieldsShape)
   .partial()
   .refine((data) => Object.values(data).some((v) => v !== undefined), {
     message: 'Minimal satu field portofolio harus diperbarui.',
-  })
-  .refine(
-    (data) => {
-      if (
-        data.price_type &&
-        data.price_type !== 'negotiable' &&
-        data.price_amount !== undefined
-      ) {
-        return data.price_amount !== null && data.price_amount > 0n;
-      }
-      return true;
-    },
-    { message: 'Harga project wajib lebih dari 0 untuk tipe harga ini.' },
-  );
+  });
 
 const NON_DOMAIN_FILE_EXTS = new Set([
   'js', 'ts', 'tsx', 'jsx', 'mjs', 'cjs', 'css', 'scss', 'html', 'htm', 'json',
