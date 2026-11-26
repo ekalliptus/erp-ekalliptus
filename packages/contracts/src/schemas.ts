@@ -541,6 +541,68 @@ export const updatePortfolioProjectSchema = z
     { message: 'Harga project wajib lebih dari 0 untuk tipe harga ini.' },
   );
 
+const NON_DOMAIN_FILE_EXTS = new Set([
+  'js', 'ts', 'tsx', 'jsx', 'mjs', 'cjs', 'css', 'scss', 'html', 'htm', 'json',
+  'png', 'jpg', 'jpeg', 'webp', 'avif', 'svg', 'gif', 'ico', 'pdf', 'apk', 'zip',
+  'gz', 'tar', 'md', 'txt', 'sql', 'env', 'xml', 'yml', 'yaml', 'csv', 'doc',
+  'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'mp3', 'mp4', 'mov', 'wav', 'exe', 'vbs',
+  'ps1', 'sh', 'php', 'py', 'go', 'rs', 'dart', 'kt', 'java', 'c', 'cpp', 'h',
+  'lock', 'map',
+]);
+
+function trimUrlTrailingPunctuation(raw: string): string {
+  return raw.replace(/[.,;:!?)\]]+$/, '');
+}
+
+function isAllowedPublicHostForExtract(host: string): boolean {
+  const lower = host.toLowerCase().replace(/\.+$/, '');
+  if (!lower || !lower.includes('.')) return false;
+  if (/^\d+(?:\.\d+){3}$/.test(lower) || lower.includes(':')) return false;
+  if (/^(localhost|.*\.localhost|.*\.local|.*\.internal|.*\.arpa|metadata\.google\.internal)$/i.test(lower)) {
+    return false;
+  }
+  return true;
+}
+
+export function extractPublicUrlFromText(text: string | null | undefined): string | null {
+  if (!text || typeof text !== 'string') return null;
+
+  const explicitMatches = text.match(/https?:\/\/[^\s<>"')]+/gi) ?? [];
+  for (const rawMatch of explicitMatches) {
+    const cleaned = trimUrlTrailingPunctuation(rawMatch);
+    const normalized = cleaned.replace(/^http:\/\//i, 'https://');
+    try {
+      const parsed = new URL(normalized);
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password) continue;
+      if (parsed.port && parsed.port !== '443') continue;
+      if (!isAllowedPublicHostForExtract(parsed.hostname)) continue;
+      return parsed.toString();
+    } catch {
+      continue;
+    }
+  }
+
+  const domainRe = /(?:^|[^a-zA-Z0-9_@.-])((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,24}(?:\/[^\s<>"')]*)?)/g;
+  let m: RegExpExecArray | null;
+  while ((m = domainRe.exec(text)) !== null) {
+    const candidate = trimUrlTrailingPunctuation(m[1] ?? '');
+    if (!candidate) continue;
+    const hostPart = candidate.split('/')[0]?.toLowerCase() ?? '';
+    if (!isAllowedPublicHostForExtract(hostPart)) continue;
+    const tld = hostPart.split('.').pop() ?? '';
+    if (NON_DOMAIN_FILE_EXTS.has(tld)) continue;
+    try {
+      const parsed = new URL(`https://${candidate}`);
+      if (!isAllowedPublicHostForExtract(parsed.hostname)) continue;
+      return parsed.toString();
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 export const capturePortfolioDemoSchema = z.object({
   demo_url: httpsUrlSchema,
   variants: z
@@ -549,6 +611,8 @@ export const capturePortfolioDemoSchema = z.object({
     .max(2)
     .optional()
     .default(['desktop', 'mobile']),
+  include_subpage: z.boolean().optional().default(true),
+  include_og_image: z.boolean().optional().default(true),
 });
 
 export type CapturePortfolioDemoVariant = 'desktop' | 'mobile';

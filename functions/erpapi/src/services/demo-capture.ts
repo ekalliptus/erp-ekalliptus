@@ -4,7 +4,20 @@ import { isSafeHttpsUrl } from './security-policy.js';
 
 export type DemoCaptureVariant = 'desktop' | 'mobile';
 export type SafeRasterMime = 'image/png' | 'image/jpeg' | 'image/webp';
-export type DemoCaptureProvider = 'cloudflare' | 'mshots' | 'microlink';
+export type DemoCaptureProvider = 'cloudflare' | 'mshots' | 'microlink' | 'og_image';
+
+export interface WebpageContext {
+  url: string;
+  hostname: string;
+  title: string;
+  description: string;
+  keywords: string;
+  headings: string[];
+  visibleText: string;
+  detectedTechClues: string[];
+  ogImageUrl: string | null;
+  subpageUrls: string[];
+}
 
 export interface DnsAddressRecord {
   address: string;
@@ -578,4 +591,325 @@ export async function captureDemoScreenshots(
     desktop,
     mobile,
   };
+}
+
+function decodeHtmlEntities(raw: string): string {
+  return raw
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#(\d+);/g, (_m, dec) => {
+      const code = Number.parseInt(dec, 10);
+      return Number.isFinite(code) && code >= 32 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : ' ';
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_m, hex) => {
+      const code = Number.parseInt(hex, 16);
+      return Number.isFinite(code) && code >= 32 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : ' ';
+    })
+    .replace(/\u2014/g, ', ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripTags(raw: string): string {
+  return decodeHtmlEntities(raw.replace(/<[^>]+>/g, ' '));
+}
+
+function extractMetaMap(html: string): Map<string, string> {
+  const metaMap = new Map<string, string>();
+  const metaTags = html.match(/<meta\s+[^>]*>/gi) ?? [];
+  for (const tag of metaTags) {
+    const attrs = new Map<string, string>();
+    const attrRe = /([a-zA-Z0-9:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+    let m: RegExpExecArray | null;
+    while ((m = attrRe.exec(tag)) !== null) {
+      const k = (m[1] || '').toLowerCase();
+      const v = m[2] ?? m[3] ?? '';
+      attrs.set(k, v);
+    }
+    const key = (attrs.get('property') || attrs.get('name') || '').trim().toLowerCase();
+    const content = attrs.get('content');
+    if (key && content && !metaMap.has(key)) {
+      metaMap.set(key, decodeHtmlEntities(content));
+    }
+  }
+  return metaMap;
+}
+
+const EXCLUDED_SUBPAGE_PREFIXES = [
+  '/_next',
+  '/api',
+  '/favicon',
+  '/icon',
+  '/apple',
+  '/manifest',
+  '/robots',
+  '/sitemap',
+  '/legal',
+  '/privacy',
+  '/terms',
+  '/login',
+  '/register',
+  '/auth',
+];
+
+const EXCLUDED_SUBPAGE_EXT_RE =
+  /\.(?:js|css|png|jpg|jpeg|webp|avif|svg|gif|ico|pdf|apk|zip|xml|json|webmanifest|txt|mp4|mp3)$/i;
+
+const SUBPAGE_PRIORITY: Array<[RegExp, number]> = [
+  [/^\/(fitur|features)(\/|$)/i, 100],
+  [/^\/(harga|pricing)(\/|$)/i, 95],
+  [/^\/(download|demo)(\/|$)/i, 90],
+  [/^\/(produk|products)(\/|$)/i, 85],
+  [/^\/(galeri|gallery)(\/|$)/i, 80],
+  [/^\/(panduan|guide)(\/|$)/i, 70],
+  [/^\/(tentang|about)(\/|$)/i, 60],
+];
+
+function scoreSubpagePath(pathname: string): number {
+  for (const [re, score] of SUBPAGE_PRIORITY) {
+    if (re.test(pathname)) return score;
+  }
+  return 10;
+}
+
+function extractInternalSubpages(html: string, baseUrl: string): string[] {
+  const origin = new URL(baseUrl).origin;
+  const discovered: Array<{ url: string; score: number; order: number }> = [];
+  const seenPaths = new Set<string>();
+  const hrefRe = /href\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
+  let m: RegExpExecArray | null;
+  let order = 0;
+
+  while ((m = hrefRe.exec(html)) !== null) {
+    const rawHref = (m[1] ?? m[2] ?? '').trim();
+    if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('mailto:') || rawHref.startsWith('tel:') || rawHref.startsWith('javascript:')) {
+      continue;
+    }
+    let resolved: URL;
+    try {
+      resolved = new URL(rawHref, baseUrl);
+    } catch {
+      continue;
+    }
+    if (resolved.protocol !== 'https:' || resolved.origin !== origin) continue;
+    const cleanPath = resolved.pathname.replace(/\/+$/, '') || '/';
+    if (cleanPath === '/' || seenPaths.has(cleanPath)) continue;
+    if (EXCLUDED_SUBPAGE_PREFIXES.some((p) => cleanPath.toLowerCase().startsWith(p))) continue;
+    if (EXCLUDED_SUBPAGE_EXT_RE.test(cleanPath)) continue;
+
+    seenPaths.add(cleanPath);
+    discovered.push({
+      url: `${resolved.origin}${cleanPath}`,
+      score: scoreSubpagePath(cleanPath),
+      order,
+    });
+    order += 1;
+  }
+
+  discovered.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.order - b.order));
+  return discovered.slice(0, 2).map((d) => d.url);
+}
+
+function detectTechCluesFromHtml(html: string, visibleText: string): string[] {
+  const clues: string[] = [];
+  const add = (label: string) => {
+    if (!clues.includes(label)) clues.push(label);
+  };
+  if (html.includes('/_next/static')) add('Next.js');
+  if (html.includes('/_astro/')) add('Astro');
+  if (html.includes('/_nuxt/')) add('Nuxt');
+  if (html.includes('wp-content')) add('WordPress');
+  if (/flutter/i.test(html)) add('Flutter');
+  if (html.includes('manifest.webmanifest')) add('PWA');
+  if (/\bandroid\b|unduh apk|\.apk\b/i.test(visibleText)) add('Android App');
+  if (/github releases/i.test(visibleText)) add('GitHub Releases');
+  if (/\bqris\b/i.test(visibleText)) add('QRIS Payment');
+  return clues;
+}
+
+export async function fetchPublicWebpageContext(
+  rawUrl: string,
+  deps?: {
+    fetchImpl?: typeof fetch;
+    dnsLookup?: DnsLookupFn;
+  },
+): Promise<WebpageContext | null> {
+  const fetchImpl = deps?.fetchImpl ?? fetch;
+  let currentUrl = rawUrl.trim();
+  let finalResponse: Response | null = null;
+  let finalUrl = currentUrl;
+  let finalHostname = '';
+
+  for (let hop = 0; hop <= 3; hop += 1) {
+    const validation = await validatePublicCaptureUrl(currentUrl, deps?.dnsLookup);
+    if (!validation.ok) return null;
+
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(
+        fetchImpl,
+        validation.url,
+        {
+          method: 'GET',
+          redirect: 'manual',
+          headers: {
+            Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+            'User-Agent': 'EkalliptusPortfolioBot/1.0',
+          },
+        },
+        8_000,
+      );
+    } catch {
+      return null;
+    }
+
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (!location || hop === 3) return null;
+      try {
+        currentUrl = new URL(location, validation.url).toString();
+      } catch {
+        return null;
+      }
+      continue;
+    }
+
+    finalResponse = res;
+    finalUrl = validation.url;
+    finalHostname = validation.hostname;
+    break;
+  }
+
+  if (!finalResponse || finalResponse.status !== 200) return null;
+  const contentType = (finalResponse.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('text/html')) return null;
+
+  const rawHtml = (await finalResponse.text().catch(() => '')).slice(0, 300_000);
+  if (!rawHtml) return null;
+
+  const metaMap = extractMetaMap(rawHtml);
+  const titleMatch = rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title =
+    (titleMatch?.[1] ? stripTags(titleMatch[1]) : '') || metaMap.get('og:title') || '';
+  const description = metaMap.get('description') || metaMap.get('og:description') || '';
+  const keywords = metaMap.get('keywords') || '';
+
+  let ogImageUrl: string | null = null;
+  const rawOg = metaMap.get('og:image') || metaMap.get('twitter:image') || '';
+  if (rawOg) {
+    try {
+      const resolvedOg = new URL(rawOg, finalUrl);
+      if (resolvedOg.protocol === 'https:') {
+        ogImageUrl = resolvedOg.toString();
+      }
+    } catch {
+      ogImageUrl = null;
+    }
+  }
+
+  const headings: string[] = [];
+  const seenHeadings = new Set<string>();
+  const headingRe = /<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi;
+  let hm: RegExpExecArray | null;
+  while ((hm = headingRe.exec(rawHtml)) !== null && headings.length < 12) {
+    const cleanH = stripTags(hm[1] || '').slice(0, 160);
+    if (!cleanH || seenHeadings.has(cleanH.toLowerCase())) continue;
+    seenHeadings.add(cleanH.toLowerCase());
+    headings.push(cleanH);
+  }
+
+  const strippedHtml = rawHtml
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<svg[\s\S]*?<\/svg>/gi, ' ');
+  const visibleText = stripTags(strippedHtml).slice(0, 3200);
+
+  return {
+    url: finalUrl,
+    hostname: finalHostname,
+    title: title.slice(0, 200),
+    description: description.slice(0, 400),
+    keywords: keywords.slice(0, 300),
+    headings,
+    visibleText,
+    detectedTechClues: detectTechCluesFromHtml(rawHtml, visibleText),
+    ogImageUrl,
+    subpageUrls: extractInternalSubpages(rawHtml, finalUrl),
+  };
+}
+
+export async function fetchSafeRemoteImage(
+  rawImageUrl: string,
+  deps?: {
+    fetchImpl?: typeof fetch;
+    dnsLookup?: DnsLookupFn;
+  },
+): Promise<CaptureVariantResult> {
+  const fetchImpl = deps?.fetchImpl ?? fetch;
+  let currentUrl = rawImageUrl.trim();
+
+  for (let hop = 0; hop <= 2; hop += 1) {
+    const validation = await validatePublicCaptureUrl(currentUrl, deps?.dnsLookup);
+    if (!validation.ok) {
+      return { ok: false, reason: validation.error };
+    }
+
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(
+        fetchImpl,
+        validation.url,
+        {
+          method: 'GET',
+          redirect: 'manual',
+          headers: { Accept: 'image/webp,image/png,image/jpeg,image/*;q=0.8' },
+        },
+        8_000,
+      );
+    } catch (err) {
+      return {
+        ok: false,
+        reason: err instanceof Error ? err.message : 'Gagal mengunduh gambar situs.',
+      };
+    }
+
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (!location || hop === 2) {
+        return { ok: false, reason: 'Terlalu banyak pengalihan saat mengunduh gambar situs.' };
+      }
+      try {
+        currentUrl = new URL(location, validation.url).toString();
+      } catch {
+        return { ok: false, reason: 'URL pengalihan gambar situs tidak valid.' };
+      }
+      continue;
+    }
+
+    if (res.status !== 200) {
+      return { ok: false, reason: `Gambar situs mengembalikan HTTP ${res.status}.` };
+    }
+
+    const bytes = await readBoundedBytes(res);
+    if (!bytes) {
+      return { ok: false, reason: 'Ukuran gambar situs melebihi batas 8 MB.' };
+    }
+    const mime = detectSafeRasterMime(bytes);
+    if (!mime) {
+      return { ok: false, reason: 'Format gambar situs bukan PNG/JPEG/WEBP minimal 4 KB.' };
+    }
+    return { ok: true, bytes, mime, provider: 'og_image' };
+  }
+
+  return { ok: false, reason: 'Gagal mengambil gambar situs.' };
 }

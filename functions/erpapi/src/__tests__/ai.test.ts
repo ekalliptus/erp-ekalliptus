@@ -120,12 +120,38 @@ describe('AI endpoint SSRF validator & autofill JSON parser', () => {
 
   it('builds structured autofill prompt with brief and categories', () => {
     const msgs = buildPortfolioAutofillMessages(
-      { brief: 'Aplikasi kasir web + mobile untuk toko bangunan', title: '', category: 'web_mobile' },
+      {
+        brief: 'Project EL-Saver dan web saver.ekalliptus.com',
+        title: '',
+        category: 'web_mobile',
+        demo_url: 'https://saver.ekalliptus.com/',
+        webpage: {
+          url: 'https://saver.ekalliptus.com/',
+          hostname: 'saver.ekalliptus.com',
+          title: 'EL-Saver: Pengunduh video sosial',
+          description: 'Aplikasi Android untuk unduh video sosial dan status WhatsApp.',
+          keywords: 'EL-Saver,video downloader',
+          headings: ['Simpan video & status favorit Anda', 'Harga sederhana, bayar sekali'],
+          visibleText: 'Unduh APK rilis v1.14.23 pembayaran QRIS',
+          detectedTechClues: ['Next.js', 'Android App', 'QRIS Payment'],
+          ogImageUrl: 'https://saver.ekalliptus.com/opengraph-image',
+          subpageUrls: ['https://saver.ekalliptus.com/fitur'],
+        },
+      },
       'System prompt uji',
     );
     assert.equal(msgs.length, 2);
     assert.ok(msgs[0].content.includes('web_mobile'));
-    assert.ok(msgs[1].content.includes('toko bangunan'));
+    assert.ok(msgs[0].content.includes('"demo_url"'));
+    assert.ok(msgs[1].content.includes('saver.ekalliptus.com'));
+    assert.ok(msgs[1].content.includes('Konten aktual yang dibaca langsung'));
+    assert.ok(msgs[1].content.includes('Next.js, Android App, QRIS Payment'));
+
+    const withFallbackUrl = parsePortfolioAutofillJson(
+      '{"title":"EL-Saver","slug":"el-saver","category":"web_mobile"}',
+      'https://saver.ekalliptus.com/',
+    );
+    assert.equal(withFallbackUrl.demo_url, 'https://saver.ekalliptus.com/');
   });
 });
 

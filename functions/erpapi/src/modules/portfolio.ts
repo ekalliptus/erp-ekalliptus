@@ -12,7 +12,13 @@ import { Hono, type Context } from 'hono';
 import { getDb, jsonSafe } from '../db.js';
 import { writeAuditLog } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/rbac.js';
-import { captureDemoScreenshots } from '../services/demo-capture.js';
+import {
+  captureDemoVariant,
+  fetchPublicWebpageContext,
+  fetchSafeRemoteImage,
+  validatePublicCaptureUrl,
+  type CaptureVariantResult,
+} from '../services/demo-capture.js';
 import { checkRateLimit, clientIp } from '../services/rate-limit.js';
 import {
   isSafeHttpsUrl,
@@ -271,64 +277,102 @@ adminRouter.post('/capture-demo', async (c) => {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  const captureRes = await captureDemoScreenshots(parsed.data.demo_url, parsed.data.variants);
-  if (captureRes.urlValidationError) {
-    return c.json({ error: captureRes.urlValidationError }, 400);
+  const validation = await validatePublicCaptureUrl(parsed.data.demo_url);
+  if (!validation.ok) {
+    return c.json({ error: validation.error }, 400);
   }
 
-  let desktopKey: string | null = null;
-  let desktopOut:
-    | { ok: true; object_key: string; preview_url: string; provider: string; bytes: number }
+  const uniqueVariants = Array.from(new Set(parsed.data.variants));
+  const wantDesktop = uniqueVariants.includes('desktop');
+  const wantMobile = uniqueVariants.includes('mobile');
+  const wantGalleryExtras = wantMobile && (parsed.data.include_subpage || parsed.data.include_og_image);
+
+  const webpage = wantGalleryExtras
+    ? await fetchPublicWebpageContext(validation.url).catch(() => null)
+    : null;
+  const subpageTargetUrl =
+    wantMobile && parsed.data.include_subpage ? (webpage?.subpageUrls?.[0] ?? null) : null;
+  const ogImageTargetUrl =
+    wantMobile && parsed.data.include_og_image ? (webpage?.ogImageUrl ?? null) : null;
+
+  const [desktopRes, mobileRes, subpageRes, ogImageRes] = await Promise.all([
+    wantDesktop
+      ? captureDemoVariant({ url: validation.url, variant: 'desktop' })
+      : Promise.resolve<CaptureVariantResult | null>(null),
+    wantMobile
+      ? captureDemoVariant({ url: validation.url, variant: 'mobile' })
+      : Promise.resolve<CaptureVariantResult | null>(null),
+    subpageTargetUrl
+      ? captureDemoVariant({ url: subpageTargetUrl, variant: 'desktop' })
+      : Promise.resolve<CaptureVariantResult | null>(null),
+    ogImageTargetUrl
+      ? fetchSafeRemoteImage(ogImageTargetUrl)
+      : Promise.resolve<CaptureVariantResult | null>(null),
+  ]);
+
+  const persistCaptureToStorage = async (
+    result: CaptureVariantResult | null,
+    suffix: string,
+    sourceUrl?: string,
+  ): Promise<
+    | {
+        ok: true;
+        object_key: string;
+        preview_url: string;
+        provider: string;
+        bytes: number;
+        source_url?: string;
+      }
     | { ok: false; reason: string }
-    | null = null;
+    | null
+  > => {
+    if (!result) return null;
+    if (!result.ok) return { ok: false, reason: result.reason };
+    const ext =
+      result.mime === 'image/png' ? 'png' : result.mime === 'image/webp' ? 'webp' : 'jpg';
+    const key = `portfolio/${auth.employee.id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${suffix}.${ext}`;
+    await uploadObject({
+      key,
+      body: result.bytes,
+      contentType: result.mime,
+    });
+    const previewUrl = await createPresignedDownloadUrl({
+      key,
+      expiresIn: 3600,
+    });
+    return {
+      ok: true,
+      object_key: key,
+      preview_url: previewUrl,
+      provider: result.provider,
+      bytes: result.bytes.byteLength,
+      ...(sourceUrl ? { source_url: sourceUrl } : {}),
+    };
+  };
 
-  if (captureRes.desktop) {
-    if (captureRes.desktop.ok) {
-      const ext =
-        captureRes.desktop.mime === 'image/png'
-          ? 'png'
-          : captureRes.desktop.mime === 'image/webp'
-            ? 'webp'
-            : 'jpg';
-      desktopKey = `portfolio/${auth.employee.id}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-demo-desktop.${ext}`;
-      await uploadObject({
-        key: desktopKey,
-        body: captureRes.desktop.bytes,
-        contentType: captureRes.desktop.mime,
-      });
-      const previewUrl = await createPresignedDownloadUrl({
-        key: desktopKey,
-        expiresIn: 3600,
-      });
-      desktopOut = {
-        ok: true,
-        object_key: desktopKey,
-        preview_url: previewUrl,
-        provider: captureRes.desktop.provider,
-        bytes: captureRes.desktop.bytes.byteLength,
-      };
-    } else {
-      desktopOut = { ok: false, reason: captureRes.desktop.reason };
-    }
-  }
+  const [desktopOut, subpageOut, ogImageOut] = await Promise.all([
+    persistCaptureToStorage(desktopRes, 'demo-desktop'),
+    persistCaptureToStorage(subpageRes, 'demo-subpage', subpageTargetUrl ?? undefined),
+    persistCaptureToStorage(ogImageRes, 'demo-og', ogImageTargetUrl ?? undefined),
+  ]);
 
   let mobileOut:
     | { ok: true; data_url: string; mime: string; provider: string; bytes: number }
     | { ok: false; reason: string }
     | null = null;
 
-  if (captureRes.mobile) {
-    if (captureRes.mobile.ok) {
-      const b64 = Buffer.from(captureRes.mobile.bytes).toString('base64');
+  if (mobileRes) {
+    if (mobileRes.ok) {
+      const b64 = Buffer.from(mobileRes.bytes).toString('base64');
       mobileOut = {
         ok: true,
-        data_url: `data:${captureRes.mobile.mime};base64,${b64}`,
-        mime: captureRes.mobile.mime,
-        provider: captureRes.mobile.provider,
-        bytes: captureRes.mobile.bytes.byteLength,
+        data_url: `data:${mobileRes.mime};base64,${b64}`,
+        mime: mobileRes.mime,
+        provider: mobileRes.provider,
+        bytes: mobileRes.bytes.byteLength,
       };
     } else {
-      mobileOut = { ok: false, reason: captureRes.mobile.reason };
+      mobileOut = { ok: false, reason: mobileRes.reason };
     }
   }
 
@@ -337,24 +381,30 @@ adminRouter.post('/capture-demo', async (c) => {
     platform: auth.platform,
     module: 'portfolio',
     action: 'capture_portfolio_demo',
-    entityId: desktopKey ?? captureRes.url,
+    entityId: desktopOut && desktopOut.ok ? desktopOut.object_key : validation.url,
     afterData: {
-      demo_url: captureRes.url,
-      hostname: captureRes.hostname,
+      demo_url: validation.url,
+      hostname: validation.hostname,
       desktop_ok: Boolean(desktopOut?.ok),
       desktop_provider: desktopOut && desktopOut.ok ? desktopOut.provider : null,
       desktop_reason: desktopOut && !desktopOut.ok ? desktopOut.reason : null,
       mobile_ok: Boolean(mobileOut?.ok),
       mobile_provider: mobileOut && mobileOut.ok ? mobileOut.provider : null,
       mobile_reason: mobileOut && !mobileOut.ok ? mobileOut.reason : null,
+      subpage_ok: Boolean(subpageOut?.ok),
+      subpage_url: subpageTargetUrl,
+      og_image_ok: Boolean(ogImageOut?.ok),
+      og_image_url: ogImageTargetUrl,
     },
   });
 
   return c.json({
-    demo_url: captureRes.url,
-    hostname: captureRes.hostname,
+    demo_url: validation.url,
+    hostname: validation.hostname,
     desktop: desktopOut,
     mobile: mobileOut,
+    subpage: subpageOut,
+    og_image: ogImageOut,
   });
 });
 

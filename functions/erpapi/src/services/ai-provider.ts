@@ -11,7 +11,8 @@ import {
   type PortfolioOfferType,
   type PortfolioPriceType,
 } from '@ekalliptus/contracts';
-import { slugifyPortfolioTitle } from './security-policy.js';
+import { slugifyPortfolioTitle, isSafeHttpsUrl } from './security-policy.js';
+import type { WebpageContext } from './demo-capture.js';
 
 export interface AiChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -51,6 +52,7 @@ export interface PortfolioAutofillDraft {
   price_amount: string | null;
   delivery_estimate: string;
   client_name: string;
+  demo_url: string | null;
   tech_stack: string[];
   highlights: string[];
   whatsapp_prefill: string;
@@ -304,6 +306,7 @@ export function buildPortfolioAutofillMessages(
     demo_url?: string;
     tech_stack_hint?: string;
     language?: 'id' | 'en';
+    webpage?: WebpageContext | null;
   },
   systemPrompt: string,
   extraInstructions?: string,
@@ -316,8 +319,8 @@ export function buildPortfolioAutofillMessages(
     '2. Dilarang memakai karakter em dash (\u2014). Gunakan koma, titik, atau tanda hubung biasa (-).',
     '3. Hindari klaim palsu atau buzzword kosong seperti revolusioner, next-generation, seamless.',
     '4. Key JSON wajib:',
-    '{"title": string, "slug": string (kebab-case), "tagline": string (max 140 char), "summary": string (2-4 kalimat jelas), "category": "website"|"mobile_app"|"web_mobile"|"erp_system"|"ui_ux"|"automation"|"other", "offer_type": "ready_to_buy"|"custom_similar"|"hybrid", "availability_status": "available"|"custom_only"|"sold", "price_type": "fixed"|"starting_from"|"negotiable", "price_amount": string_digits_or_null, "delivery_estimate": string (contoh "3-5 hari kerja"), "client_name": string (industri/sektor, contoh "Retail & Gudang"), "tech_stack": string[] (max 8 item), "highlights": string[] (4-7 fitur nyata/deliverables), "whatsapp_prefill": string (1 kalimat pembuka WA sopan, max 180 char)}',
-    '5. Langsung tulis JSON singkat dan padat tanpa narasi tambahan.',
+    '{"title": string, "slug": string (kebab-case), "tagline": string (max 140 char), "summary": string (2-4 kalimat jelas), "category": "website"|"mobile_app"|"web_mobile"|"erp_system"|"ui_ux"|"automation"|"other", "offer_type": "ready_to_buy"|"custom_similar"|"hybrid", "availability_status": "available"|"custom_only"|"sold", "price_type": "fixed"|"starting_from"|"negotiable", "price_amount": string_digits_or_null, "delivery_estimate": string (contoh "3-5 hari kerja"), "client_name": string (industri/sektor, contoh "Retail & Gudang"), "demo_url": string_https_or_null, "tech_stack": string[] (max 8 item), "highlights": string[] (4-7 fitur nyata/deliverables), "whatsapp_prefill": string (1 kalimat pembuka WA sopan, max 180 char)}',
+    '5. Jika disediakan konten aktual website, gunakan fakta aktual dari website tersebut (jangan mengarang fitur atau kategori yang bertentangan). Langsung tulis JSON singkat dan padat tanpa narasi tambahan.',
   ];
   if (extraInstructions && extraInstructions.trim().length > 0) {
     sysParts.push(`Instruksi tambahan admin: ${extraInstructions.trim()}`);
@@ -331,13 +334,31 @@ export function buildPortfolioAutofillMessages(
     input.demo_url ? `URL Demo: ${input.demo_url}` : '',
     input.tech_stack_hint ? `Petunjuk tech stack: ${input.tech_stack_hint}` : '',
     input.brief ? `Catatan / deskripsi project:\n${input.brief}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  ];
+
+  if (input.webpage) {
+    const wp = input.webpage;
+    userLines.push(
+      [
+        `Konten aktual yang dibaca langsung dari website ${wp.url}:`,
+        wp.title ? `- Title: ${wp.title}` : '',
+        wp.description ? `- Description: ${wp.description}` : '',
+        wp.keywords ? `- Keywords: ${wp.keywords}` : '',
+        wp.headings.length > 0 ? `- Headings: ${wp.headings.join(' | ')}` : '',
+        wp.detectedTechClues.length > 0
+          ? `- Deteksi Teknologi: ${wp.detectedTechClues.join(', ')}`
+          : '',
+        wp.visibleText ? `- Isi Halaman:\n${wp.visibleText.slice(0, 2200)}` : '',
+        'Gunakan fakta aktual dari website di atas (jangan mengarang fitur atau kategori yang bertentangan dengan isi website tersebut).',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
 
   return [
     { role: 'system', content: sysParts.join('\n') },
-    { role: 'user', content: userLines },
+    { role: 'user', content: userLines.filter(Boolean).join('\n') },
   ];
 }
 
@@ -412,7 +433,10 @@ function tryParseJsonObject(raw: string): Record<string, unknown> | null {
   return null;
 }
 
-export function parsePortfolioAutofillJson(rawContent: string): PortfolioAutofillDraft {
+export function parsePortfolioAutofillJson(
+  rawContent: string,
+  fallbackDemoUrl?: string | null,
+): PortfolioAutofillDraft {
   const withoutThink = rawContent
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<think>[\s\S]*$/gi, '')
@@ -465,6 +489,13 @@ export function parsePortfolioAutofillJson(rawContent: string): PortfolioAutofil
     return out;
   };
 
+  const rawDemoUrl = typeof parsed.demo_url === 'string' ? parsed.demo_url.trim() : '';
+  const resolvedDemoUrl = isSafeHttpsUrl(rawDemoUrl)
+    ? rawDemoUrl
+    : fallbackDemoUrl && isSafeHttpsUrl(fallbackDemoUrl)
+      ? fallbackDemoUrl.trim()
+      : null;
+
   return {
     title,
     slug,
@@ -489,6 +520,7 @@ export function parsePortfolioAutofillJson(rawContent: string): PortfolioAutofil
       typeof parsed.client_name === 'string'
         ? cleanNoEmDash(parsed.client_name).slice(0, 120)
         : '',
+    demo_url: resolvedDemoUrl,
     tech_stack: cleanList(parsed.tech_stack, 40, 12),
     highlights: cleanList(parsed.highlights, 200, 10),
     whatsapp_prefill:

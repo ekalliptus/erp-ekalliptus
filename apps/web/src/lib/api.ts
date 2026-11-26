@@ -844,6 +844,28 @@ export interface CapturePortfolioDemoResponse {
       }
     | { ok: false; reason: string }
     | null;
+  subpage?:
+    | {
+        ok: true;
+        object_key: string;
+        preview_url: string;
+        provider: string;
+        bytes: number;
+        source_url?: string;
+      }
+    | { ok: false; reason: string }
+    | null;
+  og_image?:
+    | {
+        ok: true;
+        object_key: string;
+        preview_url: string;
+        provider: string;
+        bytes: number;
+        source_url?: string;
+      }
+    | { ok: false; reason: string }
+    | null;
 }
 
 export interface AiProviderPresetView {
@@ -962,6 +984,7 @@ export interface PortfolioAutofillDraft {
   price_amount: string | null;
   delivery_estimate: string;
   client_name: string;
+  demo_url?: string | null;
   tech_stack: string[];
   highlights: string[];
   whatsapp_prefill: string;
@@ -975,6 +998,7 @@ export interface PortfolioAutofillResponse {
     model: string;
     latency_ms: number;
     total_tokens: number | null;
+    source_url_fetched?: string | null;
   };
 }
 
@@ -1552,7 +1576,12 @@ export const erpApi = {
       apiFetch<{ ok: boolean; id: string }>(`/api/portfolio/${id}`, {
         method: 'DELETE',
       }),
-    captureDemo: (body: { demo_url: string; variants?: Array<'desktop' | 'mobile'> }) =>
+    captureDemo: (body: {
+      demo_url: string;
+      variants?: Array<'desktop' | 'mobile'>;
+      include_subpage?: boolean;
+      include_og_image?: boolean;
+    }) =>
       apiFetch<CapturePortfolioDemoResponse>('/api/portfolio/capture-demo', {
         method: 'POST',
         body: JSON.stringify(body),

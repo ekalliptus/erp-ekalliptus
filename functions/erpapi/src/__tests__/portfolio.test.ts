@@ -3,10 +3,13 @@ import { describe, it } from 'node:test';
 import {
   capturePortfolioDemoSchema,
   createPortfolioProjectSchema,
+  extractPublicUrlFromText,
 } from '@ekalliptus/contracts';
 import {
   captureDemoVariant,
   detectSafeRasterMime,
+  fetchPublicWebpageContext,
+  fetchSafeRemoteImage,
   isPrivateOrReservedIp,
   validatePublicCaptureUrl,
 } from '../services/demo-capture.js';
@@ -282,5 +285,92 @@ describe('Demo URL capture SSRF guard, MIME checks & provider fallback', () => {
       fetchImpl: (async () => new Response('down', { status: 503 })) as typeof fetch,
     });
     assert.equal(allFailed.ok, false);
+  });
+
+  it('extracts public URLs and bare domains from Indonesian brief text while ignoring emails and filenames', () => {
+    assert.equal(
+      extractPublicUrlFromText(
+        'Project EL-Saver, aplikasi EL-Saver dan web saver.ekalliptus.com. Cari informasinya dari web tersebut dan gambarnya juga',
+      ),
+      'https://saver.ekalliptus.com/',
+    );
+    assert.equal(
+      extractPublicUrlFromText('Lihat demo di https://demo.ekalliptus.com/app.'),
+      'https://demo.ekalliptus.com/app',
+    );
+    assert.equal(
+      extractPublicUrlFromText('Hubungi admin@ekalliptus.com untuk versi v1.14.23 atau unduh app.apk & index.html di localhost.'),
+      null,
+    );
+  });
+
+  it('fetches webpage context cleanly and blocks SSRF redirects to private hosts', async () => {
+    const publicDns = async () => [{ address: '104.21.45.12', family: 4 }];
+    const mixedDns = async (host: string) =>
+      host === 'internal.local' || host === 'evil-internal.com'
+        ? [{ address: '127.0.0.1', family: 4 }]
+        : [{ address: '104.21.45.12', family: 4 }];
+
+    const sampleHtml = `<!doctype html><html><head>
+      <title>EL-Saver: Pengunduh video sosial</title>
+      <meta name="description" content="Aplikasi Android unduh video &amp; simpan status WhatsApp." />
+      <meta property="og:image" content="/opengraph-image?v=1" />
+      <meta name="keywords" content="EL-Saver,downloader" />
+      <link rel="manifest" href="/manifest.webmanifest" />
+    </head><body>
+      <script src="/_next/static/chunks/main.js"></script>
+      <a href="/legal/privacy">Privacy</a>
+      <a href="/fitur">Fitur</a>
+      <a href="/harga">Harga</a>
+      <h1>Simpan video &amp; status favorit Anda</h1>
+      <h2>Pembayaran QRIS otomatis</h2>
+      <p>Unduh APK versi terbaru langsung via GitHub Releases untuk Android.</p>
+    </body></html>`;
+
+    const ctx = await fetchPublicWebpageContext('https://saver.ekalliptus.com/', {
+      dnsLookup: publicDns,
+      fetchImpl: (async () =>
+        new Response(sampleHtml, {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        })) as typeof fetch,
+    });
+    assert.ok(ctx);
+    assert.equal(ctx.title, 'EL-Saver: Pengunduh video sosial');
+    assert.equal(ctx.ogImageUrl, 'https://saver.ekalliptus.com/opengraph-image?v=1');
+    assert.deepEqual(ctx.subpageUrls, [
+      'https://saver.ekalliptus.com/fitur',
+      'https://saver.ekalliptus.com/harga',
+    ]);
+    assert.ok(ctx.detectedTechClues.includes('Next.js'));
+    assert.ok(ctx.detectedTechClues.includes('Android App'));
+    assert.ok(ctx.detectedTechClues.includes('QRIS Payment'));
+
+    // Redirect to private SSRF host must be blocked
+    const blockedRedirect = await fetchPublicWebpageContext('https://saver.ekalliptus.com/', {
+      dnsLookup: mixedDns,
+      fetchImpl: (async () =>
+        new Response('', {
+          status: 302,
+          headers: { location: 'https://evil-internal.com/secret' },
+        })) as typeof fetch,
+    });
+    assert.equal(blockedRedirect, null);
+
+    // fetchSafeRemoteImage accepts valid PNG and rejects SSRF redirects
+    const pngBytes = makeFakeImage([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 5000);
+    const ogOk = await fetchSafeRemoteImage('https://saver.ekalliptus.com/opengraph-image', {
+      dnsLookup: publicDns,
+      fetchImpl: (async () =>
+        new Response(Buffer.from(pngBytes), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        })) as typeof fetch,
+    });
+    assert.equal(ogOk.ok, true);
+    if (ogOk.ok) {
+      assert.equal(ogOk.provider, 'og_image');
+      assert.equal(ogOk.mime, 'image/png');
+    }
   });
 });

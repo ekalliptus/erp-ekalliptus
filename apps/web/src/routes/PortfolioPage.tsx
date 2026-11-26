@@ -1,4 +1,5 @@
 import {
+  extractPublicUrlFromText,
   hasPermission,
   PORTFOLIO_AVAILABILITY_STATUSES,
   PORTFOLIO_CATEGORIES,
@@ -181,6 +182,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     priceAmount: string;
     deliveryEstimate: string;
     clientName: string;
+    demoUrl: string;
     techStackText: string;
     highlightsText: string;
     whatsappPrefill: string;
@@ -394,7 +396,11 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     if (generatingMedia) return;
 
     const effTitle = (opts.draft?.title ?? title).trim();
-    const effDemo = (opts.draft?.demoUrl ?? demoUrl).trim();
+    const detectedBriefUrl = extractPublicUrlFromText(autofillBrief) || '';
+    const effDemo = (opts.draft?.demoUrl ?? demoUrl).trim() || detectedBriefUrl;
+    if (effDemo && !demoUrl.trim()) {
+      setDemoUrl(effDemo);
+    }
     if (effTitle.length < 3 && !effDemo) {
       setMediaFeedback({
         kind: 'error',
@@ -520,49 +526,66 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
       }
 
       if (needGallery) {
+        const uploadedKeys: string[] = [];
+        const localUrls: string[] = [];
+        const galleryParts: string[] = [];
+
+        // Slot 1: Live Mobile Showcase (framed 16:10) or Studio Overview fallback
         let slide1: File;
-        let usedMobileLive = false;
         if (captureRes?.mobile?.ok) {
-          setMediaProgress('Menyusun Slide Mobile Live & Galeri Studio...');
+          setMediaProgress('Menyusun Slide Mobile Live...');
           try {
             slide1 = await renderLiveMobileShowcaseSlide(
               studioInput,
               captureRes.mobile.data_url,
               studioTheme,
             );
-            usedMobileLive = true;
+            galleryParts.push(`Mobile Live (${captureRes.mobile.provider})`);
           } catch {
             slide1 = await renderStudioOverviewSlide(studioInput, studioTheme);
+            galleryParts.push('Ringkasan Studio');
           }
         } else {
           if (captureRes?.mobile && !captureRes.mobile.ok) {
             fallbackWarnings.push(`Live mobile gagal (${captureRes.mobile.reason})`);
           }
-          setMediaProgress('Merender 3 Slide Galeri Studio...');
+          setMediaProgress('Merender Slide Ringkasan Studio...');
           slide1 = await renderStudioOverviewSlide(studioInput, studioTheme);
+          galleryParts.push('Ringkasan Studio');
+        }
+        setMediaProgress('Mengunggah slide galeri #1...');
+        uploadedKeys.push(await uploadFileViaPresign('portfolio', slide1));
+        localUrls.push(trackBlobUrl(URL.createObjectURL(slide1)));
+
+        // Slot 2: Live Internal Subpage Capture (/fitur, /harga, etc.) or Studio Highlights fallback
+        if (captureRes?.subpage?.ok) {
+          uploadedKeys.push(captureRes.subpage.object_key);
+          localUrls.push(captureRes.subpage.preview_url);
+          galleryParts.push('Subpage Live');
+        } else {
+          setMediaProgress('Merender & mengunggah slide galeri #2...');
+          const slide2 = await renderStudioHighlightsSlide(studioInput, studioTheme);
+          uploadedKeys.push(await uploadFileViaPresign('portfolio', slide2));
+          localUrls.push(trackBlobUrl(URL.createObjectURL(slide2)));
+          galleryParts.push('Fitur Studio');
         }
 
-        const slide2 = await renderStudioHighlightsSlide(studioInput, studioTheme);
-        const slide3 = await renderStudioStackSpecSlide(studioInput, studioTheme);
-        const slides = [slide1, slide2, slide3];
-
-        const uploadedKeys: string[] = [];
-        const localUrls: string[] = [];
-        for (let i = 0; i < slides.length; i += 1) {
-          setMediaProgress(`Mengunggah slide galeri (${i + 1}/${slides.length})...`);
-          const file = slides[i];
-          const key = await uploadFileViaPresign('portfolio', file);
-          uploadedKeys.push(key);
-          localUrls.push(trackBlobUrl(URL.createObjectURL(file)));
+        // Slot 3: Official Site OG Banner or Studio Stack Spec fallback
+        if (captureRes?.og_image?.ok) {
+          uploadedKeys.push(captureRes.og_image.object_key);
+          localUrls.push(captureRes.og_image.preview_url);
+          galleryParts.push('Banner OG Situs');
+        } else {
+          setMediaProgress('Merender & mengunggah slide galeri #3...');
+          const slide3 = await renderStudioStackSpecSlide(studioInput, studioTheme);
+          uploadedKeys.push(await uploadFileViaPresign('portfolio', slide3));
+          localUrls.push(trackBlobUrl(URL.createObjectURL(slide3)));
+          galleryParts.push('Spec Studio');
         }
 
         setGalleryKeys(uploadedKeys);
         setGalleryPreviewSrcs(localUrls);
-        summaryNotes.push(
-          usedMobileLive
-            ? `Galeri: Slide Mobile Live (${captureRes?.mobile?.ok ? captureRes.mobile.provider : 'live'}) + 2 Slide Studio`
-            : 'Galeri: 3 Slide Studio Showcase',
-        );
+        summaryNotes.push(`Galeri: ${galleryParts.join(' + ')}`);
       }
 
       const fallbackSuffix =
@@ -598,6 +621,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
         priceAmount,
         deliveryEstimate,
         clientName,
+        demoUrl,
         techStackText,
         highlightsText,
         whatsappPrefill,
@@ -625,6 +649,9 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
       const nextDeliveryEstimate =
         overwrite || !deliveryEstimate.trim() ? d.delivery_estimate : deliveryEstimate;
       const nextClientName = overwrite || !clientName.trim() ? d.client_name : clientName;
+      const extractedBriefUrl = extractPublicUrlFromText(autofillBrief) || '';
+      const nextDemoUrl =
+        overwrite || !demoUrl.trim() ? (d.demo_url || extractedBriefUrl || demoUrl) : demoUrl;
       const nextTechStackText =
         overwrite || !techStackText.trim() ? d.tech_stack.join(', ') : techStackText;
       const nextHighlightsText =
@@ -643,13 +670,23 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
       setPriceAmount(nextPriceAmount);
       setDeliveryEstimate(nextDeliveryEstimate);
       setClientName(nextClientName);
+      setDemoUrl(nextDemoUrl);
       setTechStackText(nextTechStackText);
       setHighlightsText(nextHighlightsText);
       setWhatsappPrefill(nextWhatsappPrefill);
 
+      let fetchedHostNote = '';
+      if (res.meta.source_url_fetched) {
+        try {
+          fetchedHostNote = ` (membaca konten aktual dari ${new URL(res.meta.source_url_fetched).hostname})`;
+        } catch {
+          fetchedHostNote = ' (membaca konten aktual website demo)';
+        }
+      }
+
       setAutofillFeedback({
         kind: 'success',
-        text: `Isian berhasil dibuat via ${res.meta.provider} (${res.meta.model}) dalam ${res.meta.latency_ms} ms. Silakan tinjau sebelum menyimpan.`,
+        text: `Isian berhasil dibuat via ${res.meta.provider} (${res.meta.model}) dalam ${res.meta.latency_ms} ms${fetchedHostNote}. Silakan tinjau sebelum menyimpan.`,
       });
 
       if (autoGenerateMediaWithAi) {
@@ -668,7 +705,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
             priceAmount: nextPriceAmount,
             deliveryEstimate: nextDeliveryEstimate,
             clientName: nextClientName,
-            demoUrl,
+            demoUrl: nextDemoUrl,
             techStackText: nextTechStackText,
             highlightsText: nextHighlightsText,
             coverImageKey,
@@ -701,6 +738,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     setPriceAmount(preAutofillSnapshot.priceAmount);
     setDeliveryEstimate(preAutofillSnapshot.deliveryEstimate);
     setClientName(preAutofillSnapshot.clientName);
+    setDemoUrl(preAutofillSnapshot.demoUrl);
     setTechStackText(preAutofillSnapshot.techStackText);
     setHighlightsText(preAutofillSnapshot.highlightsText);
     setWhatsappPrefill(preAutofillSnapshot.whatsappPrefill);
@@ -1310,8 +1348,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
                   htmlFor={`${baseId}-autofill-brief`}
                   className="block text-[11px] font-medium text-text-secondary"
                 >
-                  Tulis catatan singkat atau rincian project (AI mengisi judul, slug, tagline,
-                  deskripsi, harga, tech stack, dan deliverables).
+                  Tulis catatan singkat, rincian, atau link website project (jika mencantumkan URL/domain seperti saver.ekalliptus.com, sistem otomatis membaca halaman dan memotret screenshot live).
                 </label>
                 <textarea
                   id={`${baseId}-autofill-brief`}
@@ -1358,11 +1395,16 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
                     }
                     onClick={() => {
                       setAutofillFeedback(null);
+                      const detectedDemoUrl =
+                        demoUrl.trim() || extractPublicUrlFromText(autofillBrief) || '';
+                      if (detectedDemoUrl && !demoUrl.trim()) {
+                        setDemoUrl(detectedDemoUrl);
+                      }
                       autofillMut.mutate({
                         brief: autofillBrief.trim(),
                         title: title.trim(),
                         category,
-                        demo_url: demoUrl.trim(),
+                        demo_url: detectedDemoUrl,
                         tech_stack_hint: techStackText.trim(),
                         language: 'id',
                       });

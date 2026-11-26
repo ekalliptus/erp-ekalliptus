@@ -1,5 +1,6 @@
 import {
   AI_PROVIDER_PRESETS,
+  extractPublicUrlFromText,
   portfolioAutofillRequestSchema,
   publicAiConsultRequestSchema,
   testAiConfigSchema,
@@ -22,6 +23,7 @@ import {
   resolveEndpointUrl,
   type AiChatMessage,
 } from '../services/ai-provider.js';
+import { fetchPublicWebpageContext } from '../services/demo-capture.js';
 import { checkRateLimit, clientIp } from '../services/rate-limit.js';
 import type { AppEnv } from '../types.js';
 import type { ErpModulePlugin } from './plugin.js';
@@ -565,8 +567,22 @@ adminRouter.post('/portfolio-autofill', async (c) => {
     );
   }
 
+  const resolvedDemoUrl = (
+    parsed.data.demo_url?.trim() ||
+    extractPublicUrlFromText(parsed.data.brief) ||
+    ''
+  ).trim();
+  const webpage = resolvedDemoUrl
+    ? await fetchPublicWebpageContext(resolvedDemoUrl).catch(() => null)
+    : null;
+  const effectiveDemoUrl = webpage?.url || resolvedDemoUrl || null;
+
   const messages = buildPortfolioAutofillMessages(
-    parsed.data,
+    {
+      ...parsed.data,
+      demo_url: effectiveDemoUrl ?? '',
+      webpage,
+    },
     eff.configRow.system_prompt,
     eff.configRow.extra_instructions,
   );
@@ -601,7 +617,7 @@ adminRouter.post('/portfolio-autofill', async (c) => {
   let draft: ReturnType<typeof parsePortfolioAutofillJson> | null = null;
   let lastParseErr = '';
   try {
-    draft = parsePortfolioAutofillJson(completion.content);
+    draft = parsePortfolioAutofillJson(completion.content, effectiveDemoUrl);
   } catch (err) {
     lastParseErr = err instanceof Error ? err.message : 'Gagal membaca output JSON dari AI.';
     if (completion.finishReason === 'length' && initialMaxTokens < 4096) {
@@ -630,7 +646,7 @@ adminRouter.post('/portfolio-autofill', async (c) => {
         return c.json({ error: completion.error }, 502);
       }
       try {
-        draft = parsePortfolioAutofillJson(completion.content);
+        draft = parsePortfolioAutofillJson(completion.content, effectiveDemoUrl);
       } catch (retryErr) {
         lastParseErr =
           retryErr instanceof Error ? retryErr.message : 'Gagal membaca output JSON dari AI.';
@@ -660,6 +676,7 @@ adminRouter.post('/portfolio-autofill', async (c) => {
         model: eff.model,
         latency_ms: totalLatencyMs,
         total_tokens: completion.usage.total_tokens,
+        source_url_fetched: webpage?.url ?? null,
       },
     });
   }
