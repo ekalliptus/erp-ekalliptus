@@ -152,6 +152,8 @@ describe('AI endpoint SSRF validator & autofill JSON parser', () => {
       'https://saver.ekalliptus.com/',
     );
     assert.equal(withFallbackUrl.demo_url, 'https://saver.ekalliptus.com/');
+    assert.equal(withFallbackUrl.price_type, 'negotiable');
+    assert.equal(withFallbackUrl.price_amount, null);
   });
 });
 

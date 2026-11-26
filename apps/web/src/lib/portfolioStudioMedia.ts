@@ -17,7 +17,7 @@ export interface PortfolioStudioInput {
   offerLabel: string;
   availabilityStatus: PortfolioAvailabilityStatus;
   availabilityLabel: string;
-  priceLabel: string;
+  priceLabel?: string | null;
   originalPriceLabel?: string | null;
   deliveryEstimate: string;
   clientName: string;
@@ -418,9 +418,12 @@ export async function renderStudioCoverSlide(
   }
 
   // Real facts strip at bottom-left
-  const factItems: Array<{ label: string; value: string }> = [
-    { label: 'HARGA TAYANG', value: input.priceLabel },
-  ];
+  const factItems: Array<{ label: string; value: string }> = [];
+  if (input.priceLabel?.trim()) {
+    factItems.push({ label: 'HARGA TAYANG', value: input.priceLabel.trim() });
+  } else {
+    factItems.push({ label: 'PENAWARAN', value: input.offerLabel });
+  }
   if (input.deliveryEstimate.trim()) {
     factItems.push({ label: 'ESTIMASI', value: input.deliveryEstimate.trim() });
   }
@@ -772,8 +775,10 @@ export async function renderStudioOverviewSlide(
     { k: 'Kategori', v: input.categoryLabel },
     { k: 'Model Penjualan', v: input.offerLabel },
     { k: 'Ketersediaan', v: input.availabilityLabel },
-    { k: 'Harga Tayang', v: input.priceLabel, accent: true },
   ];
+  if (input.priceLabel?.trim()) {
+    metaRows.push({ k: 'Harga Tayang', v: input.priceLabel.trim(), accent: true });
+  }
   if (input.deliveryEstimate.trim()) {
     metaRows.push({ k: 'Estimasi Deploy', v: input.deliveryEstimate.trim() });
   }
@@ -931,8 +936,10 @@ export async function renderStudioStackSpecSlide(
   const specRows: Array<{ label: string; value: string; accent?: boolean }> = [
     { label: 'Skema Penawaran', value: input.offerLabel },
     { label: 'Status Ketersediaan', value: input.availabilityLabel },
-    { label: 'Harga Tayang', value: input.priceLabel, accent: true },
   ];
+  if (input.priceLabel?.trim()) {
+    specRows.push({ label: 'Harga Tayang', value: input.priceLabel.trim(), accent: true });
+  }
   if (input.deliveryEstimate.trim()) {
     specRows.push({ label: 'Estimasi Siap / Deploy', value: input.deliveryEstimate.trim() });
   }

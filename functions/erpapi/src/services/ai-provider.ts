@@ -319,8 +319,8 @@ export function buildPortfolioAutofillMessages(
     '2. Dilarang memakai karakter em dash (\u2014). Gunakan koma, titik, atau tanda hubung biasa (-).',
     '3. Hindari klaim palsu atau buzzword kosong seperti revolusioner, next-generation, seamless.',
     '4. Key JSON wajib:',
-    '{"title": string, "slug": string (kebab-case), "tagline": string (max 140 char), "summary": string (2-4 kalimat jelas), "category": "website"|"mobile_app"|"web_mobile"|"erp_system"|"ui_ux"|"automation"|"other", "offer_type": "ready_to_buy"|"custom_similar"|"hybrid", "availability_status": "available"|"custom_only"|"sold", "price_type": "fixed"|"starting_from"|"negotiable", "price_amount": string_digits_or_null, "delivery_estimate": string (contoh "3-5 hari kerja"), "client_name": string (industri/sektor, contoh "Retail & Gudang"), "demo_url": string_https_or_null, "tech_stack": string[] (max 8 item), "highlights": string[] (4-7 fitur nyata/deliverables), "whatsapp_prefill": string (1 kalimat pembuka WA sopan, max 180 char)}',
-    '5. Jika disediakan konten aktual website, gunakan fakta aktual dari website tersebut (jangan mengarang fitur atau kategori yang bertentangan). Langsung tulis JSON singkat dan padat tanpa narasi tambahan.',
+    '{"title": string, "slug": string (kebab-case), "tagline": string (max 140 char), "summary": string (2-4 kalimat jelas), "category": "website"|"mobile_app"|"web_mobile"|"erp_system"|"ui_ux"|"automation"|"other", "offer_type": "ready_to_buy"|"custom_similar"|"hybrid", "availability_status": "available"|"custom_only"|"sold", "price_type": "negotiable"|"fixed"|"starting_from", "price_amount": string_digits_or_null, "delivery_estimate": string (contoh "3-5 hari kerja"), "client_name": string (industri/sektor, contoh "Retail & Gudang"), "demo_url": string_https_or_null, "tech_stack": string[] (max 8 item), "highlights": string[] (4-7 fitur nyata/deliverables), "whatsapp_prefill": string (1 kalimat pembuka WA sopan, max 180 char)}',
+    '5. Secara default untuk portofolio profesional, JANGAN tampilkan harga ("price_type": "negotiable", "price_amount": null). Dilarang mengambil harga langganan/in-app pengguna akhir dari website demo sebagai harga jual project. Isi nominal harga hanya jika catatan admin secara eksplisit menuliskan harga jual/pembuatan project. Jika disediakan konten aktual website, gunakan fakta aktual dari website tersebut. Langsung tulis JSON singkat dan padat tanpa narasi tambahan.',
   ];
   if (extraInstructions && extraInstructions.trim().length > 0) {
     sysParts.push(`Instruksi tambahan admin: ${extraInstructions.trim()}`);
@@ -463,7 +463,7 @@ export function parsePortfolioAutofillJson(
   const rawSlug = typeof parsed.slug === 'string' ? cleanNoEmDash(parsed.slug) : '';
   const slug = slugifyPortfolioTitle(rawSlug || title) || 'project-ekalliptus';
 
-  const priceType = pickEnum(parsed.price_type, PORTFOLIO_PRICE_TYPES, 'starting_from');
+  const priceType = pickEnum(parsed.price_type, PORTFOLIO_PRICE_TYPES, 'negotiable');
   let priceAmount: string | null = null;
   if (priceType !== 'negotiable' && parsed.price_amount !== null && parsed.price_amount !== undefined) {
     const digits = String(parsed.price_amount).replace(/\D/g, '');

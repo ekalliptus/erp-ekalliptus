@@ -144,6 +144,15 @@ describe('createPortfolioProjectSchema validation', () => {
       price_amount: null,
     });
     assert.equal(webMobile.success, true);
+
+    const hiddenDefault = createPortfolioProjectSchema.safeParse({
+      title: 'Web Profil Profesional',
+    });
+    assert.equal(hiddenDefault.success, true);
+    if (hiddenDefault.success) {
+      assert.equal(hiddenDefault.data.price_type, 'negotiable');
+      assert.equal(hiddenDefault.data.price_amount, undefined);
+    }
   });
 });
 

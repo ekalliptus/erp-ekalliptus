@@ -487,7 +487,7 @@ const portfolioFieldsShape = {
   category: portfolioCategorySchema.default('website'),
   offer_type: portfolioOfferTypeSchema.default('hybrid'),
   availability_status: portfolioAvailabilitySchema.default('available'),
-  price_type: portfolioPriceTypeSchema.default('fixed'),
+  price_type: portfolioPriceTypeSchema.default('negotiable'),
   price_amount: bigintNonNegativeSchema.nullable().optional(),
   original_price_amount: bigintNonNegativeSchema.nullable().optional(),
   client_name: z.string().trim().max(120).nullable().optional(),

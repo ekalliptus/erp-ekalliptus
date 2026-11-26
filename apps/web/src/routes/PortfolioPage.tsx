@@ -4,7 +4,6 @@ import {
   PORTFOLIO_AVAILABILITY_STATUSES,
   PORTFOLIO_CATEGORIES,
   PORTFOLIO_OFFER_TYPES,
-  PORTFOLIO_PRICE_TYPES,
   type PortfolioAvailabilityStatus,
   type PortfolioCategory,
   type PortfolioOfferType,
@@ -76,10 +75,16 @@ const AVAILABILITY_META: Record<PortfolioAvailabilityStatus, { label: string; to
 };
 
 const PRICE_TYPE_LABELS: Record<PortfolioPriceType, string> = {
-  fixed: 'Harga Pasti',
-  starting_from: 'Mulai Dari',
-  negotiable: 'Diskusi Harga',
+  negotiable: 'Tanpa Harga (Sembunyikan)',
+  starting_from: 'Mulai Dari (Opsional)',
+  fixed: 'Harga Pasti (Opsional)',
 };
+
+const PRICE_TYPE_ORDER: readonly PortfolioPriceType[] = [
+  'negotiable',
+  'starting_from',
+  'fixed',
+];
 
 function toSlugPreview(raw: string): string {
   return raw
@@ -94,9 +99,9 @@ function toSlugPreview(raw: string): string {
 function formatPortfolioPricePreview(
   priceType: PortfolioPriceType,
   priceDigits: string,
-): string {
+): string | null {
   const numeric = priceDigits.replace(/\D/g, '');
-  if (priceType === 'negotiable' || !numeric) return 'Diskusi Harga';
+  if (priceType === 'negotiable' || !numeric || BigInt(numeric) <= 0n) return null;
   const formatted = formatRupiah(numeric);
   return priceType === 'starting_from' ? `Mulai ${formatted}` : formatted;
 }
@@ -134,7 +139,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
   const [offerType, setOfferType] = useState<PortfolioOfferType>('hybrid');
   const [availabilityStatus, setAvailabilityStatus] =
     useState<PortfolioAvailabilityStatus>('available');
-  const [priceType, setPriceType] = useState<PortfolioPriceType>('fixed');
+  const [priceType, setPriceType] = useState<PortfolioPriceType>('negotiable');
   const [priceAmount, setPriceAmount] = useState('');
   const [originalPriceAmount, setOriginalPriceAmount] = useState('');
   const [clientName, setClientName] = useState('');
@@ -235,7 +240,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
     setCategory('website');
     setOfferType('hybrid');
     setAvailabilityStatus('available');
-    setPriceType('fixed');
+    setPriceType('negotiable');
     setPriceAmount('');
     setOriginalPriceAmount('');
     setClientName('');
@@ -842,11 +847,12 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
 
     const cleanPriceDigits = priceAmount.replace(/\D/g, '');
     if (priceType !== 'negotiable' && (!cleanPriceDigits || BigInt(cleanPriceDigits) <= 0n)) {
-      setFormError('Isi nominal harga project (lebih dari 0), atau pilih skema Diskusi Harga.');
+      setFormError('Isi nominal harga project (lebih dari 0), atau pilih Tanpa Harga (Sembunyikan).');
       return;
     }
 
     const cleanOriginalDigits = originalPriceAmount.replace(/\D/g, '');
+    const isHiddenPrice = priceType === 'negotiable';
     const cleanSort = Number.parseInt(sortOrder, 10);
 
     const techStack = techStackText
@@ -878,8 +884,8 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
       offer_type: offerType,
       availability_status: availabilityStatus,
       price_type: priceType,
-      price_amount: cleanPriceDigits ? cleanPriceDigits : null,
-      original_price_amount: cleanOriginalDigits ? cleanOriginalDigits : null,
+      price_amount: isHiddenPrice ? null : cleanPriceDigits ? cleanPriceDigits : null,
+      original_price_amount: isHiddenPrice ? null : cleanOriginalDigits ? cleanOriginalDigits : null,
       client_name: clientName.trim() || null,
       delivery_estimate: deliveryEstimate.trim() || null,
       demo_url: demoUrl.trim() || null,
@@ -909,9 +915,11 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
       `Halo Ekalliptus, saya tertarik dengan project "${title.trim() || 'Nama Project'}".`,
     `Kode project: ${previewSlug}`,
     `Kebutuhan: ${offerType === 'custom_similar' ? 'Pesan Versi Custom' : 'Beli Project Siap Pakai'}`,
-    `Harga tertera: ${previewPrice}`,
+    previewPrice ? `Harga tertera: ${previewPrice}` : '',
     `Halaman: https://ekalliptus.com/id/portfolio/${previewSlug}`,
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   if (!canView) {
     return (
@@ -1097,12 +1105,14 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
           {filteredItems.map((item) => {
             const avail = AVAILABILITY_META[item.availability_status];
             const previewUrl = item.cover_preview_url ?? item.cover_image_url;
-            const formattedPrice =
-              item.price_type === 'negotiable' || !item.price_amount
-                ? 'Diskusi Harga'
-                : item.price_type === 'starting_from'
-                  ? `Mulai ${formatRupiah(item.price_amount)}`
-                  : formatRupiah(item.price_amount);
+            const hasVisiblePrice =
+              item.price_type !== 'negotiable' &&
+              Boolean(item.price_amount && BigInt(item.price_amount) > 0n);
+            const formattedPrice = !hasVisiblePrice
+              ? null
+              : item.price_type === 'starting_from'
+                ? `Mulai ${formatRupiah(item.price_amount!)}`
+                : formatRupiah(item.price_amount!);
 
             return (
               <article
@@ -1156,12 +1166,18 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
                   </div>
 
                   <div className="flex items-baseline justify-between gap-2 border-t border-border/70 pt-3">
-                    <div>
-                      <p className="text-[11px] text-text-secondary">Harga Tayang</p>
-                      <p className="font-display text-sm font-bold text-text-primary">
-                        {formattedPrice}
+                    {formattedPrice ? (
+                      <div>
+                        <p className="text-[11px] text-text-secondary">Harga Tayang</p>
+                        <p className="font-display text-sm font-bold text-text-primary">
+                          {formattedPrice}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] font-medium text-text-secondary">
+                        Harga disembunyikan
                       </p>
-                    </div>
+                    )}
                     <p className="text-[11px] text-text-secondary">
                       Update {formatDateTimeId(item.updated_at)}
                     </p>
@@ -1590,7 +1606,7 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
                 onChange={(e) => setPriceType(e.target.value as PortfolioPriceType)}
                 className="h-11 w-full rounded-md border border-border bg-canvas px-3 text-xs text-text-primary focus:border-accent focus:outline-none"
               >
-                {PORTFOLIO_PRICE_TYPES.map((pt) => (
+                {PRICE_TYPE_ORDER.map((pt) => (
                   <option key={pt} value={pt}>
                     {PRICE_TYPE_LABELS[pt]}
                   </option>
@@ -1599,37 +1615,43 @@ export function PortfolioPage({ me }: { me: MeResponse }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <label htmlFor={`${baseId}-price`} className="block text-xs font-semibold text-text-primary">
-                Harga Tayang (IDR){priceType !== 'negotiable' ? ' *' : ''}
-              </label>
-              <input
-                id={`${baseId}-price`}
-                type="text"
-                inputMode="numeric"
-                value={priceAmount}
-                onChange={(e) => setPriceAmount(e.target.value.replace(/\D/g, ''))}
-                placeholder="3500000"
-                className="h-11 w-full rounded-md border border-border bg-canvas px-3 font-mono text-xs text-text-primary placeholder:text-text-secondary focus:border-accent focus:outline-none"
-              />
-            </div>
+          {priceType === 'negotiable' ? (
+            <p className="rounded-md border border-border bg-surface-subtle px-3 py-2.5 text-[11px] text-text-secondary">
+              Harga tidak dicantumkan di katalog publik maupun pesan WhatsApp. Pilih Mulai Dari atau Harga Pasti di atas jika sewaktu-waktu ingin menampilkan nominal harga.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label htmlFor={`${baseId}-price`} className="block text-xs font-semibold text-text-primary">
+                  Harga Tayang (IDR) *
+                </label>
+                <input
+                  id={`${baseId}-price`}
+                  type="text"
+                  inputMode="numeric"
+                  value={priceAmount}
+                  onChange={(e) => setPriceAmount(e.target.value.replace(/\D/g, ''))}
+                  placeholder="3500000"
+                  className="h-11 w-full rounded-md border border-border bg-canvas px-3 font-mono text-xs text-text-primary placeholder:text-text-secondary focus:border-accent focus:outline-none"
+                />
+              </div>
 
-            <div className="space-y-1.5">
-              <label htmlFor={`${baseId}-origprice`} className="block text-xs font-semibold text-text-primary">
-                Harga Sebelum Diskon (Opsional)
-              </label>
-              <input
-                id={`${baseId}-origprice`}
-                type="text"
-                inputMode="numeric"
-                value={originalPriceAmount}
-                onChange={(e) => setOriginalPriceAmount(e.target.value.replace(/\D/g, ''))}
-                placeholder="5000000"
-                className="h-11 w-full rounded-md border border-border bg-canvas px-3 font-mono text-xs text-text-primary placeholder:text-text-secondary focus:border-accent focus:outline-none"
-              />
+              <div className="space-y-1.5">
+                <label htmlFor={`${baseId}-origprice`} className="block text-xs font-semibold text-text-primary">
+                  Harga Sebelum Diskon (Opsional)
+                </label>
+                <input
+                  id={`${baseId}-origprice`}
+                  type="text"
+                  inputMode="numeric"
+                  value={originalPriceAmount}
+                  onChange={(e) => setOriginalPriceAmount(e.target.value.replace(/\D/g, ''))}
+                  placeholder="5000000"
+                  className="h-11 w-full rounded-md border border-border bg-canvas px-3 font-mono text-xs text-text-primary placeholder:text-text-secondary focus:border-accent focus:outline-none"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
