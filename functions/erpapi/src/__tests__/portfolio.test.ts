@@ -151,6 +151,18 @@ describe('createPortfolioProjectSchema validation', () => {
     });
     assert.equal(webMobile.success, true);
 
+    const desktopOnly = createPortfolioProjectSchema.safeParse({
+      title: 'Aplikasi Kasir Windows',
+      category: 'desktop',
+    });
+    assert.equal(desktopOnly.success, true);
+
+    const desktopMobile = createPortfolioProjectSchema.safeParse({
+      title: 'Suite Desktop & Android',
+      category: 'desktop_mobile',
+    });
+    assert.equal(desktopMobile.success, true);
+
     const hiddenDefault = createPortfolioProjectSchema.safeParse({
       title: 'Web Profil Profesional',
     });

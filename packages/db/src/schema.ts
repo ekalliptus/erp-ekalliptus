@@ -573,7 +573,7 @@ export const portfolio_projects = pgTable(
     index('portfolio_projects_category_idx').on(table.category),
     check(
       'portfolio_projects_category_chk',
-      sql`category IN ('website', 'mobile_app', 'web_mobile', 'erp_system', 'ui_ux', 'automation', 'other')`,
+      sql`category IN ('website', 'mobile_app', 'web_mobile', 'desktop', 'desktop_mobile', 'erp_system', 'ui_ux', 'automation', 'other')`,
     ),
     check(
       'portfolio_projects_offer_type_chk',

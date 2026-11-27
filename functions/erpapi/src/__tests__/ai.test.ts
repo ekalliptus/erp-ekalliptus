@@ -142,10 +142,21 @@ describe('AI endpoint SSRF validator & autofill JSON parser', () => {
     );
     assert.equal(msgs.length, 2);
     assert.ok(msgs[0].content.includes('web_mobile'));
+    assert.ok(msgs[0].content.includes('"desktop"'));
+    assert.ok(msgs[0].content.includes('"desktop_mobile"'));
     assert.ok(msgs[0].content.includes('"demo_url"'));
     assert.ok(msgs[1].content.includes('saver.ekalliptus.com'));
     assert.ok(msgs[1].content.includes('Konten aktual yang dibaca langsung'));
     assert.ok(msgs[1].content.includes('Next.js, Android App, QRIS Payment'));
+
+    const desktopDraft = parsePortfolioAutofillJson(
+      '{"title":"Suite Kasir","slug":"suite-kasir","category":"desktop_mobile"}',
+    );
+    assert.equal(desktopDraft.category, 'desktop_mobile');
+    assert.equal(
+      parsePortfolioAutofillJson('{"title":"Desktop ERP","category":"desktop"}').category,
+      'desktop',
+    );
 
     const withFallbackUrl = parsePortfolioAutofillJson(
       '{"title":"EL-Saver","slug":"el-saver","category":"web_mobile"}',

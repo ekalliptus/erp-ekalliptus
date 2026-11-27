@@ -56,6 +56,8 @@ const CATEGORY_LABELS: Record<PortfolioCategory, string> = {
   website: 'Website',
   mobile_app: 'Mobile App',
   web_mobile: 'Website & Mobile',
+  desktop: 'Desktop',
+  desktop_mobile: 'Desktop & Mobile',
   erp_system: 'Sistem ERP',
   ui_ux: 'Desain UI/UX',
   automation: 'Otomasi & Bot',
