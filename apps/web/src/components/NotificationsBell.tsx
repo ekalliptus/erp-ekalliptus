@@ -44,13 +44,16 @@ export function NotificationsBell() {
   const unread = useQuery({
     queryKey: ['notifications', 'unread'],
     queryFn: () => erpApi.notifications.unreadCount(),
-    refetchInterval: 60_000,
+    staleTime: 60_000,
+    refetchInterval: 300_000,
+    refetchIntervalInBackground: false,
   });
   const list = useQuery({
     queryKey: ['notifications', 'list'],
     queryFn: () => erpApi.notifications.list(30),
     enabled: open,
-    refetchInterval: open ? 60_000 : false,
+    refetchInterval: open ? 120_000 : false,
+    refetchIntervalInBackground: false,
   });
   const invalidateAll = () => qc.invalidateQueries({ queryKey: ['notifications'] });
   const markAll = useMutation({

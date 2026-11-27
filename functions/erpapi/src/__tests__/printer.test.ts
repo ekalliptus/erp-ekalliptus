@@ -3,12 +3,15 @@ import { describe, it } from 'node:test';
 import {
   approvePrintJobSchema,
   deviceWhatsappActionSchema,
+  printAgentSyncSchema,
   updatePrintDeviceSchema,
   upsertPrintPricingRuleSchema,
 } from '@ekalliptus/contracts';
 import {
   calculatePrintJobPricing,
+  hasDeviceStatusChanged,
   hashAgentToken,
+  HEARTBEAT_ONLINE_WINDOW_MS,
   parsePageRangeCount,
   sanitizeDeviceForClient,
   verifyAgentTokenHash,
@@ -150,7 +153,7 @@ describe('Smart Printer unit logic', () => {
     assert.equal(strippedConnected.openwa_qr_code, null);
 
     const strippedOffline = sanitizeDeviceForClient(
-      { ...baseRow, last_heartbeat_at: new Date(Date.now() - 120_000) },
+      { ...baseRow, last_heartbeat_at: new Date(Date.now() - HEARTBEAT_ONLINE_WINDOW_MS - 60_000) },
       { includePairing: true },
     );
     assert.equal(strippedOffline.openwa_qr_code, null);
@@ -184,6 +187,81 @@ describe('Smart Printer unit logic', () => {
     assert.equal(formattedPhone.success, true);
     if (formattedPhone.success) {
       assert.equal(formattedPhone.data.phone, '6281999900306');
+    }
+  });
+
+  it('detects only meaningful device status changes to prevent heartbeat event spam', () => {
+    const nowMs = Date.now();
+    const prev = {
+      printer_state: 'idle',
+      openwa_status: 'connected',
+      openwa_qr_code: null,
+      openwa_link_code: null,
+      host: '192.168.0.5',
+      model: 'HP Smart Tank 580-590 series',
+      last_heartbeat_at: new Date(nowMs - 60_000),
+    };
+    const unchanged = {
+      printer_state: 'idle',
+      openwa_status: 'connected',
+      openwa_qr_code: null,
+      openwa_link_code: null,
+      host: '192.168.0.5',
+      model: 'HP Smart Tank 580-590 series',
+    };
+
+    assert.equal(hasDeviceStatusChanged(prev, unchanged, nowMs), false);
+    assert.equal(
+      hasDeviceStatusChanged(prev, { ...unchanged, printer_state: 'processing' }, nowMs),
+      true,
+    );
+    assert.equal(
+      hasDeviceStatusChanged(prev, { ...unchanged, openwa_status: 'qr_required' }, nowMs),
+      true,
+    );
+    assert.equal(
+      hasDeviceStatusChanged(prev, { ...unchanged, openwa_qr_code: '2@qr' }, nowMs),
+      true,
+    );
+    assert.equal(
+      hasDeviceStatusChanged(prev, { ...unchanged, openwa_link_code: '12345678' }, nowMs),
+      true,
+    );
+    assert.equal(
+      hasDeviceStatusChanged(prev, { ...unchanged, host: '192.168.0.12' }, nowMs),
+      true,
+    );
+    assert.equal(
+      hasDeviceStatusChanged(
+        { ...prev, last_heartbeat_at: new Date(nowMs - HEARTBEAT_ONLINE_WINDOW_MS - 1_000) },
+        unchanged,
+        nowMs,
+      ),
+      true,
+    );
+  });
+
+  it('validates printAgentSyncSchema defaults and explicit overrides', () => {
+    const defaultsOnly = printAgentSyncSchema.safeParse({});
+    assert.equal(defaultsOnly.success, true);
+    if (defaultsOnly.success) {
+      assert.equal(defaultsOnly.data.include_job, true);
+      assert.equal(defaultsOnly.data.include_outbox, true);
+      assert.equal(defaultsOnly.data.wa_connected, false);
+      assert.equal(defaultsOnly.data.openwa_status, 'disconnected');
+    }
+
+    const explicit = printAgentSyncSchema.safeParse({
+      printer_state: 'idle',
+      openwa_status: 'connected',
+      include_job: false,
+      include_outbox: true,
+      wa_connected: true,
+    });
+    assert.equal(explicit.success, true);
+    if (explicit.success) {
+      assert.equal(explicit.data.include_job, false);
+      assert.equal(explicit.data.wa_connected, true);
     }
   });
 });

@@ -49,6 +49,7 @@ export function startOpenWaWorker({
   headless = true,
   linkCode = '',
   onStateChange = null,
+  onJobIngested = null,
   logger = console,
 }) {
   const resolvedSessionPath = path.resolve(sessionPath);
@@ -327,6 +328,13 @@ export function startOpenWaWorker({
             `[openwa] Dokumen masuk -> ${ingested?.job?.job_code || decision.filename} ` +
               `(${detectedPages} hal, deduplicated=${Boolean(ingested?.deduplicated)})`,
           );
+          if (typeof onJobIngested === 'function') {
+            try {
+              onJobIngested(ingested?.job || null);
+            } catch {
+              // Ignore listener errors
+            }
+          }
         } catch (err) {
           logger.error('[openwa] Gagal memproses pesan masuk:', err?.message || err);
         }

@@ -176,8 +176,9 @@ export function PrinterPage({ me }: { me: MeResponse }) {
       const activePairingOrCmd = list.some(
         (d) => Boolean(d.pending_command) || (d.is_online && d.openwa_status === 'qr_required'),
       );
-      return activePairingOrCmd ? 3_000 : 10_000;
+      return activePairingOrCmd ? 5_000 : 60_000;
     },
+    refetchIntervalInBackground: false,
   });
 
   const pricingQuery = useQuery({
@@ -195,7 +196,14 @@ export function PrinterPage({ me }: { me: MeResponse }) {
         limit: 80,
       }),
     enabled: canView,
-    refetchInterval: 12_000,
+    refetchInterval: (query) => {
+      const jobs = query.state.data?.jobs ?? [];
+      const hasInFlightJob = jobs.some(
+        (j) => j.status === 'pending_approval' || j.status === 'queued' || j.status === 'printing',
+      );
+      return hasInFlightJob ? 15_000 : 60_000;
+    },
+    refetchIntervalInBackground: false,
   });
 
   const accountsQuery = useQuery({

@@ -4,8 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { PDFDocument } from 'pdf-lib';
+import { PrintBridgeApiClient } from '../src/api-client.mjs';
 import { countDocumentPages, isOfficeExtension } from '../src/doc-inspect.mjs';
 import { loadBridgeEnv } from '../src/env-loader.mjs';
+import { computeBackoffDelayMs, shouldUseBurstMode } from '../src/index.mjs';
 import { classifyIncomingMessage, MAX_PRINT_FILE_BYTES } from '../src/message-filter.mjs';
 import { decodeDecryptedMedia } from '../src/openwa-worker.mjs';
 
@@ -205,6 +207,110 @@ describe('Bridge env loader (.env and .env.local precedence)', () => {
       assert.equal(env2.PRINT_AGENT_TOKEN, 'ekp_from_bridge_env_local');
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Bridge quota-safe backoff and adaptive burst scheduling', () => {
+  it('applies long backoff for 402/401/429 and capped exponential backoff for 5xx/network errors', () => {
+    assert.equal(computeBackoffDelayMs(402, 1), 900_000);
+    assert.equal(computeBackoffDelayMs(401, 2), 900_000);
+    assert.equal(computeBackoffDelayMs(429, 1), 120_000);
+    assert.equal(computeBackoffDelayMs(500, 1), 10_000);
+    assert.equal(computeBackoffDelayMs(500, 2), 20_000);
+    assert.equal(computeBackoffDelayMs(null, 3), 40_000);
+    assert.equal(computeBackoffDelayMs(null, 10), 300_000);
+  });
+
+  it('activates burst mode only for active work, qr_required, or active burst window', () => {
+    assert.equal(
+      shouldUseBurstMode({
+        nowMs: 1_000,
+        burstUntilMs: 500,
+        openwaStatus: 'connected',
+        hasActiveWork: false,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldUseBurstMode({
+        nowMs: 1_000,
+        burstUntilMs: 5_000,
+        openwaStatus: 'connected',
+        hasActiveWork: false,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldUseBurstMode({
+        nowMs: 1_000,
+        burstUntilMs: 0,
+        openwaStatus: 'qr_required',
+        hasActiveWork: false,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldUseBurstMode({
+        nowMs: 1_000,
+        burstUntilMs: 0,
+        openwaStatus: 'connected',
+        hasActiveWork: true,
+      }),
+      true,
+    );
+  });
+
+  it('checks S3 doorbell signal cleanly for baseline, 304 unchanged, seq change, and 403 expiry', async () => {
+    const client = new PrintBridgeApiClient({
+      baseUrl: 'https://api.example.test',
+      agentToken: 'ekp_test_token_0123456789abcdef',
+    });
+    const originalFetch = globalThis.fetch;
+    try {
+      let step = 0;
+      globalThis.fetch = async () => {
+        step += 1;
+        if (step === 1) {
+          return new Response(JSON.stringify({ seq: 's1' }), {
+            status: 200,
+            headers: { ETag: '"e1"' },
+          });
+        }
+        if (step === 2) {
+          return new Response(null, { status: 304 });
+        }
+        if (step === 3) {
+          return new Response(JSON.stringify({ seq: 's2' }), {
+            status: 200,
+            headers: { ETag: '"e2"' },
+          });
+        }
+        return new Response('AccessDenied', { status: 403 });
+      };
+
+      const r1 = await client.checkSignal('https://s3.example.test/wakeup.json');
+      assert.deepEqual(r1, { ok: true, changed: false, expired: false, etag: '"e1"', seq: 's1' });
+
+      const r2 = await client.checkSignal('https://s3.example.test/wakeup.json', {
+        lastEtag: r1.etag,
+        lastSeq: r1.seq,
+      });
+      assert.deepEqual(r2, { ok: true, changed: false, expired: false, etag: '"e1"', seq: 's1' });
+
+      const r3 = await client.checkSignal('https://s3.example.test/wakeup.json', {
+        lastEtag: r2.etag,
+        lastSeq: r2.seq,
+      });
+      assert.deepEqual(r3, { ok: true, changed: true, expired: false, etag: '"e2"', seq: 's2' });
+
+      const r4 = await client.checkSignal('https://s3.example.test/wakeup.json', {
+        lastEtag: r3.etag,
+        lastSeq: r3.seq,
+      });
+      assert.deepEqual(r4, { ok: false, changed: true, expired: true, etag: null, seq: null });
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

@@ -875,6 +875,12 @@ export const printAgentHeartbeatSchema = z.object({
   capabilities: z.record(z.unknown()).optional(),
 });
 
+export const printAgentSyncSchema = printAgentHeartbeatSchema.extend({
+  include_job: z.boolean().optional().default(true),
+  include_outbox: z.boolean().optional().default(true),
+  wa_connected: z.boolean().optional().default(false),
+});
+
 export const printAgentPresignUploadSchema = z.object({
   filename: z.string().trim().min(1).max(180),
   content_type: z.string().trim().min(3).max(120),

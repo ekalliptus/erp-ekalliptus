@@ -12,6 +12,7 @@ import {
   printAgentJobResultSchema,
   printAgentOutboxAckSchema,
   printAgentPresignUploadSchema,
+  printAgentSyncSchema,
   rejectPrintJobSchema,
   updatePrintDeviceSchema,
   updatePrintJobOptionsSchema,
@@ -47,14 +48,18 @@ import {
   createPresignedDownloadUrl,
   createPresignedUploadUrl,
   deleteObject,
+  objectExists,
+  uploadObject,
 } from '../services/storage.js';
 import type { AppEnv } from '../types.js';
 import type { ErpModulePlugin } from './plugin.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const HEARTBEAT_ONLINE_WINDOW_MS = 45_000;
+export const HEARTBEAT_ONLINE_WINDOW_MS = 7 * 60 * 60 * 1000;
 const QR_FRESHNESS_WINDOW_MS = 90_000;
 const MAX_PRINT_FILE_BYTES = 26_214_400n; // 25 MiB
+const PRINT_SIGNAL_OBJECT_KEY = 'print-signals/wakeup.json';
+const PRINT_SIGNAL_URL_TTL_SECONDS = 43_200; // 12 hours
 
 const FALLBACK_PRICES: Record<string, bigint> = {
   'a4:mono': 500n,
@@ -251,6 +256,83 @@ export function sanitizeDeviceForClient(
     openwa_qr_updated_at:
       exposePairing && openwa_qr_updated_at ? openwa_qr_updated_at.toISOString() : null,
   };
+}
+
+export function hasDeviceStatusChanged(
+  prev: {
+    printer_state: string;
+    openwa_status: string;
+    openwa_qr_code: string | null;
+    openwa_link_code: string | null;
+    host: string | null;
+    model: string;
+    last_heartbeat_at: Date | null;
+  },
+  next: {
+    printer_state: string;
+    openwa_status: string;
+    openwa_qr_code: string | null;
+    openwa_link_code: string | null;
+    host: string | null;
+    model: string;
+  },
+  nowMs = Date.now(),
+): boolean {
+  const wasOffline =
+    !prev.last_heartbeat_at || nowMs - prev.last_heartbeat_at.getTime() > HEARTBEAT_ONLINE_WINDOW_MS;
+  if (wasOffline) return true;
+  if (prev.printer_state !== next.printer_state) return true;
+  if (prev.openwa_status !== next.openwa_status) return true;
+  if ((prev.openwa_qr_code ?? null) !== (next.openwa_qr_code ?? null)) return true;
+  if ((prev.openwa_link_code ?? null) !== (next.openwa_link_code ?? null)) return true;
+  if ((prev.host ?? null) !== (next.host ?? null)) return true;
+  if (prev.model !== next.model) return true;
+  return false;
+}
+
+async function touchPrintSignal(reason: string, deviceId?: string | null): Promise<void> {
+  try {
+    const payload = JSON.stringify({
+      seq: `${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+      reason,
+      device_id: deviceId ?? null,
+      updated_at: new Date().toISOString(),
+    });
+    await uploadObject({
+      key: PRINT_SIGNAL_OBJECT_KEY,
+      body: payload,
+      contentType: 'application/json',
+    });
+  } catch (err) {
+    console.warn(
+      '[print-signal] Gagal memperbarui sinyal S3:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+async function createPrintSignalPollInfo(): Promise<{ url: string; expires_at: string } | null> {
+  try {
+    const exists = await objectExists(PRINT_SIGNAL_OBJECT_KEY);
+    if (!exists) {
+      await touchPrintSignal('init');
+    }
+    const url = await createPresignedDownloadUrl({
+      key: PRINT_SIGNAL_OBJECT_KEY,
+      expiresIn: PRINT_SIGNAL_URL_TTL_SECONDS,
+      contentType: 'application/json',
+    });
+    return {
+      url,
+      expires_at: new Date(Date.now() + PRINT_SIGNAL_URL_TTL_SECONDS * 1000).toISOString(),
+    };
+  } catch (err) {
+    console.warn(
+      '[print-signal] Gagal membuat presigned URL sinyal:',
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 }
 
 function buildWaMessageText(
@@ -717,6 +799,9 @@ printerRouter.patch('/devices/:id', requirePermission('printer', 'update'), asyn
   });
 
   if (!result) return c.json({ error: 'Perangkat printer tidak ditemukan.' }, 404);
+  if (d.dry_run_mode !== undefined || d.host !== undefined || d.is_active !== undefined) {
+    await touchPrintSignal('device_updated', id);
+  }
   return c.json({ device: sanitizeDeviceForClient(result) });
 });
 
@@ -831,6 +916,7 @@ printerRouter.post('/devices/:id/whatsapp', requirePermission('printer', 'update
   });
 
   if (!updated) return c.json({ error: 'Perangkat printer tidak ditemukan.' }, 404);
+  await touchPrintSignal(`whatsapp:${d.action}`, id);
   return c.json({
     device: sanitizeDeviceForClient(updated, { includePairing: true }),
     queued_command: d.action,
@@ -1117,6 +1203,10 @@ printerRouter.post('/jobs/manual', requirePermission('printer', 'create'), async
     return job;
   });
 
+  if (created.status === 'queued') {
+    await touchPrintSignal('manual_job_queued', created.device_id);
+  }
+
   return c.json({ job: jsonSafe(created) }, 201);
 });
 
@@ -1350,6 +1440,8 @@ printerRouter.post('/jobs/:id/approve', requirePermission('printer', 'approve'),
       return row;
     });
 
+    await touchPrintSignal('job_approved', approved.device_id);
+
     return c.json({ job: jsonSafe(approved) });
   } catch (err) {
     if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
@@ -1422,6 +1514,8 @@ printerRouter.post('/jobs/:id/reject', requirePermission('printer', 'approve'), 
       await deleteObject(objectKeyToDelete).catch(() => {});
     }
 
+    await touchPrintSignal('job_rejected', rejected.device_id);
+
     return c.json({ job: jsonSafe(rejected) });
   } catch (err) {
     if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
@@ -1480,6 +1574,8 @@ printerRouter.post('/jobs/:id/reprint', requirePermission('printer', 'approve'),
 
       return row;
     });
+
+    await touchPrintSignal('job_requeued', reprinted.device_id);
 
     return c.json({ job: jsonSafe(reprinted) });
   } catch (err) {
@@ -1577,17 +1673,21 @@ printerRouter.delete('/jobs/:id/file', requirePermission('printer', 'delete'), a
 // ---------------------------------------------------------------------------
 // Authenticated Bridge Agent Router: /api/print-agent/*
 // ---------------------------------------------------------------------------
-const agentRouter = new Hono<AppEnv>();
-agentRouter.use('*', printAgentAuth);
-
-agentRouter.post('/heartbeat', async (c) => {
-  const device = c.get('printDevice')!;
-  const body = await c.req.json().catch(() => null);
-  const parsed = printAgentHeartbeatSchema.safeParse(body);
-  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
-
-  const d = parsed.data;
-  const now = new Date();
+async function applyDeviceHeartbeatUpdate(
+  device: typeof print_devices.$inferSelect,
+  d: {
+    printer_host?: string | null;
+    printer_model?: string | null;
+    printer_state?: string | null;
+    printer_state_reasons?: string[];
+    ink_levels?: Array<{ name: string; level: number | null; color?: string | null }>;
+    openwa_status: string;
+    openwa_qr_code?: string | null;
+    openwa_link_code?: string | null;
+    capabilities?: Record<string, unknown>;
+  },
+  now: Date,
+) {
   const isQrRequired = d.openwa_status === 'qr_required';
   const nextQrCode = isQrRequired
     ? d.openwa_qr_code !== undefined
@@ -1601,7 +1701,8 @@ agentRouter.post('/heartbeat', async (c) => {
     : null;
   const nextQrUpdatedAt = isQrRequired && (nextQrCode || nextLinkCode) ? now : null;
 
-  const [updated] = await getDb()
+  const db = getDb();
+  const [updated] = await db
     .update(print_devices)
     .set({
       host: d.printer_host !== undefined ? d.printer_host : device.host,
@@ -1620,12 +1721,104 @@ agentRouter.post('/heartbeat', async (c) => {
     .where(eq(print_devices.id, device.id))
     .returning();
 
-  await emitErpEvent(getDb(), 'erp:printer', 'device_heartbeat', {
-    device_id: updated.id,
-    printer_state: updated.printer_state,
-    openwa_status: updated.openwa_status,
-    has_qr: Boolean(updated.openwa_qr_code),
+  if (hasDeviceStatusChanged(device, updated, now.getTime())) {
+    await emitErpEvent(db, 'erp:printer', 'device_status_changed', {
+      device_id: updated.id,
+      printer_state: updated.printer_state,
+      openwa_status: updated.openwa_status,
+      has_qr: Boolean(updated.openwa_qr_code),
+    });
+  }
+
+  return updated;
+}
+
+async function claimNextQueuedJobForDevice(deviceId: string) {
+  const db = getDb();
+  const claimed = await db.transaction(async (tx) => {
+    const [nextJob] = await tx
+      .select()
+      .from(print_jobs)
+      .where(
+        and(
+          eq(print_jobs.status, 'queued'),
+          or(eq(print_jobs.device_id, deviceId), isNull(print_jobs.device_id)),
+        ),
+      )
+      .orderBy(asc(print_jobs.created_at))
+      .limit(1)
+      .for('update', { skipLocked: true });
+
+    if (!nextJob) return null;
+
+    const [updated] = await tx
+      .update(print_jobs)
+      .set({
+        status: 'printing',
+        device_id: deviceId,
+        updated_at: new Date(),
+      })
+      .where(eq(print_jobs.id, nextJob.id))
+      .returning();
+
+    await writeAuditLog(tx, {
+      actorId: null,
+      platform: 'system',
+      module: 'printer',
+      action: 'claim_job',
+      entityId: updated.id,
+      beforeData: { status: 'queued' },
+      afterData: { status: 'printing', device_id: deviceId },
+    });
+
+    await emitErpEvent(tx, 'erp:printer', 'job_claimed', {
+      job_id: updated.id,
+      job_code: updated.job_code,
+      device_id: deviceId,
+    });
+
+    return updated;
   });
+
+  if (!claimed) {
+    return { job: null, downloadUrl: null as string | null };
+  }
+
+  const downloadUrl = await createPresignedDownloadUrl({
+    key: claimed.file_object_key,
+    expiresIn: 600,
+    contentType: claimed.file_mime || undefined,
+  });
+
+  return { job: claimed, downloadUrl };
+}
+
+async function listPendingOutboxForDevice(deviceId: string) {
+  return getDb()
+    .select()
+    .from(print_wa_outbox)
+    .where(
+      and(
+        eq(print_wa_outbox.status, 'pending'),
+        lt(print_wa_outbox.attempt_count, 5),
+        or(eq(print_wa_outbox.device_id, deviceId), isNull(print_wa_outbox.device_id)),
+      ),
+    )
+    .orderBy(asc(print_wa_outbox.created_at))
+    .limit(20);
+}
+
+const agentRouter = new Hono<AppEnv>();
+agentRouter.use('*', printAgentAuth);
+
+agentRouter.post('/heartbeat', async (c) => {
+  const device = c.get('printDevice')!;
+  const body = await c.req.json().catch(() => null);
+  const parsed = printAgentHeartbeatSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+  const now = new Date();
+  const updated = await applyDeviceHeartbeatUpdate(device, parsed.data, now);
 
   return c.json({
     ok: true,
@@ -1641,6 +1834,70 @@ agentRouter.post('/heartbeat', async (c) => {
           requested_at: updated.pending_command_at ? updated.pending_command_at.toISOString() : null,
         }
       : null,
+    server_time: now.toISOString(),
+  });
+});
+
+agentRouter.post('/sync', async (c) => {
+  const device = c.get('printDevice')!;
+  const body = await c.req.json().catch(() => null);
+  const parsed = printAgentSyncSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+  const d = parsed.data;
+  const now = new Date();
+  const updated = await applyDeviceHeartbeatUpdate(device, d, now);
+
+  const claimed =
+    d.include_job !== false
+      ? await claimNextQueuedJobForDevice(device.id)
+      : { job: null, downloadUrl: null as string | null };
+
+  const outboxMessages =
+    d.include_outbox !== false && (d.wa_connected || d.openwa_status === 'connected')
+      ? await listPendingOutboxForDevice(device.id)
+      : [];
+
+  const [pendingApprovalOrQueue] = await getDb()
+    .select({ id: print_jobs.id })
+    .from(print_jobs)
+    .where(
+      and(
+        inArray(print_jobs.status, ['pending_approval', 'queued', 'printing']),
+        or(eq(print_jobs.device_id, device.id), isNull(print_jobs.device_id)),
+      ),
+    )
+    .limit(1);
+
+  const hasActiveWork = Boolean(
+    claimed.job ||
+      outboxMessages.length > 0 ||
+      updated.pending_command ||
+      updated.openwa_status === 'qr_required' ||
+      pendingApprovalOrQueue,
+  );
+
+  const signal = await createPrintSignalPollInfo();
+
+  return c.json({
+    ok: true,
+    device: sanitizeDeviceForClient(updated),
+    config: {
+      dry_run_mode: updated.dry_run_mode,
+      host: updated.host,
+    },
+    pending_command: updated.pending_command
+      ? {
+          command: updated.pending_command,
+          payload: updated.pending_command_payload ?? {},
+          requested_at: updated.pending_command_at ? updated.pending_command_at.toISOString() : null,
+        }
+      : null,
+    job: claimed.job ? jsonSafe(claimed.job) : null,
+    download_url: claimed.downloadUrl,
+    outbox_messages: jsonSafe(outboxMessages),
+    has_active_work: hasActiveWork,
+    signal,
     server_time: now.toISOString(),
   });
 });
@@ -1832,66 +2089,15 @@ agentRouter.post('/jobs/ingest', async (c) => {
 
 agentRouter.post('/jobs/claim-next', async (c) => {
   const device = c.get('printDevice')!;
-  const db = getDb();
+  const claimed = await claimNextQueuedJobForDevice(device.id);
 
-  const claimed = await db.transaction(async (tx) => {
-    const [nextJob] = await tx
-      .select()
-      .from(print_jobs)
-      .where(
-        and(
-          eq(print_jobs.status, 'queued'),
-          or(eq(print_jobs.device_id, device.id), isNull(print_jobs.device_id)),
-        ),
-      )
-      .orderBy(asc(print_jobs.created_at))
-      .limit(1)
-      .for('update', { skipLocked: true });
-
-    if (!nextJob) return null;
-
-    const [updated] = await tx
-      .update(print_jobs)
-      .set({
-        status: 'printing',
-        device_id: device.id,
-        updated_at: new Date(),
-      })
-      .where(eq(print_jobs.id, nextJob.id))
-      .returning();
-
-    await writeAuditLog(tx, {
-      actorId: null,
-      platform: 'system',
-      module: 'printer',
-      action: 'claim_job',
-      entityId: updated.id,
-      beforeData: { status: 'queued' },
-      afterData: { status: 'printing', device_id: device.id },
-    });
-
-    await emitErpEvent(tx, 'erp:printer', 'job_claimed', {
-      job_id: updated.id,
-      job_code: updated.job_code,
-      device_id: device.id,
-    });
-
-    return updated;
-  });
-
-  if (!claimed) {
+  if (!claimed.job) {
     return c.json({ job: null, download_url: null });
   }
 
-  const downloadUrl = await createPresignedDownloadUrl({
-    key: claimed.file_object_key,
-    expiresIn: 600,
-    contentType: claimed.file_mime || undefined,
-  });
-
   return c.json({
-    job: jsonSafe(claimed),
-    download_url: downloadUrl,
+    job: jsonSafe(claimed.job),
+    download_url: claimed.downloadUrl,
   });
 });
 
@@ -2018,18 +2224,7 @@ agentRouter.post('/jobs/:id/result', async (c) => {
 
 agentRouter.get('/wa-outbox/pending', async (c) => {
   const device = c.get('printDevice')!;
-  const items = await getDb()
-    .select()
-    .from(print_wa_outbox)
-    .where(
-      and(
-        eq(print_wa_outbox.status, 'pending'),
-        lt(print_wa_outbox.attempt_count, 5),
-        or(eq(print_wa_outbox.device_id, device.id), isNull(print_wa_outbox.device_id)),
-      ),
-    )
-    .orderBy(asc(print_wa_outbox.created_at))
-    .limit(20);
+  const items = await listPendingOutboxForDevice(device.id);
 
   return c.json({ messages: jsonSafe(items) });
 });

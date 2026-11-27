@@ -48,6 +48,68 @@ export class PrintBridgeApiClient {
     });
   }
 
+  sync(payload) {
+    return this._requestJson('/api/print-agent/sync', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async checkSignal(signalUrl, { lastEtag = null, lastSeq = null } = {}) {
+    if (!signalUrl) {
+      return { ok: false, changed: false, expired: false, etag: lastEtag, seq: lastSeq };
+    }
+    const headers = new Headers();
+    if (lastEtag) {
+      headers.set('If-None-Match', lastEtag);
+    }
+
+    const res = await fetch(signalUrl, {
+      method: 'GET',
+      cache: 'no-store',
+      headers,
+    });
+
+    if (res.status === 304) {
+      return { ok: true, changed: false, expired: false, etag: lastEtag, seq: lastSeq };
+    }
+    if (res.status === 403) {
+      return { ok: false, changed: true, expired: true, etag: null, seq: null };
+    }
+    if (res.status === 404) {
+      return { ok: true, changed: false, expired: false, etag: lastEtag, seq: lastSeq };
+    }
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status} saat cek print signal`);
+      err.status = res.status;
+      throw err;
+    }
+
+    const etag = res.headers.get('etag') || null;
+    let seq = null;
+    try {
+      const data = await res.json();
+      if (data && typeof data.seq === 'string') {
+        seq = data.seq;
+      }
+    } catch {
+      seq = null;
+    }
+
+    const hasBaseline = lastEtag !== null || lastSeq !== null;
+    const seqChanged = seq !== null ? seq !== lastSeq : false;
+    const etagChanged = etag !== null ? etag !== lastEtag : false;
+    const changed = hasBaseline && (seqChanged || etagChanged);
+
+    return {
+      ok: true,
+      changed,
+      expired: false,
+      etag: etag ?? lastEtag,
+      seq: seq ?? lastSeq,
+    };
+  }
+
   presignUpload(payload) {
     return this._requestJson('/api/print-agent/jobs/presign-upload', {
       method: 'POST',

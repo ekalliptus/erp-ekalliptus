@@ -132,10 +132,22 @@ export function AppShell({
   const [mobileOpen, setMobileOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [isTabVisible, setIsTabVisible] = useState(
+    () => typeof document === 'undefined' || document.visibilityState !== 'hidden',
+  );
   const [liveStatus, setLiveStatus] = useState<LiveFeedStatus>({
-    status: 'connecting',
+    status: 'idle',
     errorMessage: null,
   });
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const onVisibilityChange = () => {
+      setIsTabVisible(document.visibilityState !== 'hidden');
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
 
   const mobileTriggerRef = useRef<HTMLButtonElement | null>(null);
   const mobileCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -161,11 +173,53 @@ export function AppShell({
   const canAttendance = hasPermission(me.permissions, 'attendance', 'view');
   const canPrinter = hasPermission(me.permissions, 'printer', 'view');
 
+  const isFinanceRoute = pathname.startsWith('/finance');
+  const isInventoryRoute = pathname.startsWith('/inventory');
+  const isAttendanceRoute = pathname.startsWith('/attendance') || pathname.startsWith('/payroll');
+  const isPrinterRoute = pathname.startsWith('/printer');
+  const isDashboardRoute = pathname === '/';
+
   const primaryRealtimeFeed = useMemo<RealtimeFeed>(() => {
+    if (isPrinterRoute && canPrinter) return 'erp:printer';
+    if (isInventoryRoute && canInventory) return 'erp:inventory';
+    if (isAttendanceRoute && canAttendance) return 'erp:attendance';
+    if (isFinanceRoute && canFinance) return 'erp:finance';
     if (canFinance) return 'erp:finance';
     if (canInventory) return 'erp:inventory';
     return 'erp:attendance';
-  }, [canFinance, canInventory]);
+  }, [
+    isPrinterRoute,
+    isInventoryRoute,
+    isAttendanceRoute,
+    isFinanceRoute,
+    canPrinter,
+    canInventory,
+    canAttendance,
+    canFinance,
+  ]);
+
+  const financeFeedEnabled =
+    isTabVisible &&
+    canFinance &&
+    (isFinanceRoute || (isDashboardRoute && primaryRealtimeFeed === 'erp:finance'));
+  const inventoryFeedEnabled =
+    isTabVisible &&
+    canInventory &&
+    (isInventoryRoute || (isDashboardRoute && primaryRealtimeFeed === 'erp:inventory'));
+  const attendanceFeedEnabled =
+    isTabVisible &&
+    canAttendance &&
+    (isAttendanceRoute || (isDashboardRoute && primaryRealtimeFeed === 'erp:attendance'));
+  const printerFeedEnabled = isTabVisible && canPrinter && isPrinterRoute;
+
+  const anyRealtimeFeedEnabled =
+    financeFeedEnabled || inventoryFeedEnabled || attendanceFeedEnabled || printerFeedEnabled;
+
+  useEffect(() => {
+    if (!anyRealtimeFeedEnabled) {
+      setLiveStatus({ status: 'idle', errorMessage: null });
+    }
+  }, [anyRealtimeFeedEnabled]);
 
   useEffect(() => {
     const onGlobalKey = (e: KeyboardEvent) => {
@@ -275,26 +329,27 @@ export function AppShell({
       <div className="flex min-h-screen bg-canvas text-text-primary">
         <ErpRealtimeSubscriber
           feed="erp:finance"
-          enabled={canFinance}
+          enabled={financeFeedEnabled}
           queryKeysToInvalidate={FINANCE_INVALIDATE_KEYS}
-          onStatusChange={primaryRealtimeFeed === 'erp:finance' ? setLiveStatus : undefined}
+          onStatusChange={financeFeedEnabled ? setLiveStatus : undefined}
         />
         <ErpRealtimeSubscriber
           feed="erp:inventory"
-          enabled={canInventory}
+          enabled={inventoryFeedEnabled}
           queryKeysToInvalidate={INVENTORY_INVALIDATE_KEYS}
-          onStatusChange={primaryRealtimeFeed === 'erp:inventory' ? setLiveStatus : undefined}
+          onStatusChange={inventoryFeedEnabled ? setLiveStatus : undefined}
         />
         <ErpRealtimeSubscriber
           feed="erp:attendance"
-          enabled={canAttendance}
+          enabled={attendanceFeedEnabled}
           queryKeysToInvalidate={ATTENDANCE_INVALIDATE_KEYS}
-          onStatusChange={primaryRealtimeFeed === 'erp:attendance' ? setLiveStatus : undefined}
+          onStatusChange={attendanceFeedEnabled ? setLiveStatus : undefined}
         />
         <ErpRealtimeSubscriber
           feed="erp:printer"
-          enabled={canPrinter}
+          enabled={printerFeedEnabled}
           queryKeysToInvalidate={PRINTER_INVALIDATE_KEYS}
+          onStatusChange={printerFeedEnabled ? setLiveStatus : undefined}
         />
 
       {/* Desktop persistent collapsible sidebar */}
